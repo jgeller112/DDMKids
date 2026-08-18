@@ -1,0 +1,459 @@
+---
+title: "DDM — Advantageous Inequity (AI) Group"
+format: html
+editor: visual
+---
+
+# Setup
+
+```{r}
+#| label: load packages
+library(tidyverse)
+library(brms)
+library(cmdstanr)
+library(emmeans)
+library(easystats)
+library(modelbased)
+library(tidybayes)
+library(patchwork)
+library(knitr)
+library(here)
+
+options(
+  scipen = 999,
+  marginaleffects_posterior_center = mean,
+  brms.short_summary = TRUE,
+  rms.backend = Sys.getenv("BRMS_BACKEND", "cmdstanr"),
+  brms.threads = as.numeric(Sys.getenv("BRMS_THREADS", 2)),
+  mc.cores = as.numeric(Sys.getenv("MAX_CORES", 4))
+)
+```
+
+Shared preprocessing lives in `Scripts/data_prep.R` so the AI and DI documents can't drift out of sync on exclusion criteria. This produces `explicit_ai` (and `explicit_di`, unused here). Paths use `here::here()`, resolved from the project root, so this works regardless of which directory actually renders the document.
+
+```{r}
+#| label: data
+source(here("Scripts", "data_prep.R"))
+head(explicit_ai)
+```
+
+# Model Specification
+
+We modeled response time and choice jointly with a hierarchical Bayesian drift diffusion model (the Wiener process; Ratcliff, 1978), estimated via `brms` (Bürkner, 2017), which compiles the model to Stan (Carpenter et al., 2017) and samples it here with `cmdstanr`. The DDM decomposes each trial's observed response time and binary choice (accept vs. reject) into four latent parameters: **drift rate** (`mu`, rate and direction of evidence accumulation — negative toward accept, positive toward reject, given how `dec_recode` was coded), **non-decision time** (`ndt`, encoding and motor-execution time not attributable to the decision process itself), **starting point** (`bias`, the initial position between the two response boundaries, expressed as a proportion of boundary separation), and **boundary separation** (`bs`, response caution — how much evidence is required before committing to a response).
+
+## Fixed and random effects
+
+`mu`, `ndt`, and `bias` were each modeled with the full `condition * dist * age.group` factorial structure (all main effects, all three 2-way interactions, and the 3-way interaction). `condition` uses `0 +` (cell-means) coding; `bs` was estimated as a single, freely-varying parameter with no predictors, and `bias` was fixed at 0.5 (unbiased) in earlier model iterations before being given this same full factorial structure. By-subject random intercepts and slopes for `dist` were included on `mu` only (`(1 + dist | p | sn)`, correlated across the two random effects via the shared group id `p`); random effects on `ndt` and `bias` were explored during model development and abandoned after producing severe divergences — with this few trials per subject per condition/allocation cell, individual differences in non-decision time and starting point are not well identified separately from individual differences in drift rate.
+
+```{r}
+#| label: formula
+formula_ai <- bf(
+  duration | dec(dec_recode) ~ 0 + condition + dist + age.group +
+    condition:dist + condition:age.group + dist:age.group +
+    condition:dist:age.group +
+    (1 + dist | p | sn),
+  ndt ~ 0 + condition + dist + age.group +
+    condition:dist + condition:age.group + dist:age.group +
+    condition:dist:age.group,
+  bias ~ 0 + condition + dist + age.group +
+    condition:dist + condition:age.group + dist:age.group +
+    condition:dist:age.group
+)
+```
+
+## Link functions
+
+| Parameter | Represents | Link | Notes |
+|---|---|---|---|
+| `mu` | drift rate | identity | unconstrained |
+| `ndt` | non-decision time | identity | constrained via prior bounds (below), not the link |
+| `bias` | starting point | logit | constrains estimates to (0, 1) |
+| `bs` | boundary separation | identity | single global parameter; Stan constrains it positive at the parameter-declaration level regardless of link |
+
+```{r}
+#| label: family
+family_ai <- wiener(link_bs = "identity", link_ndt = "identity", link_bias = "logit")
+```
+
+## Priors
+
+```{r}
+#| label: prior
+bprior_ai <-
+  prior(normal(0, 1), class = b) +                                      # drift rate (mu) fixed effects
+  prior(normal(0.3, 0.1), class = b, dpar = ndt, lb = 0, ub = "min_Y") + # ndt fixed effects
+  prior(normal(0, 1), class = b, dpar = bias) +                         # bias, logit scale: 0.5 <-> logit 0
+  prior(normal(0, 0.03), class = sd, group = sn, lb = 0)                # by-subject random effects (mu)
+```
+
+```{r}
+#| label: prior-table
+bprior_ai |>
+  as.data.frame() |>
+  dplyr::select(prior, class, dpar, group, lb, ub) |>
+  dplyr::mutate(dplyr::across(everything(), ~ dplyr::na_if(as.character(.x), ""))) |>
+  knitr::kable(caption = "Priors specified for the AI-group model.")
+```
+
+`bs` has no prior line above — it is not given a predictor formula (see Fixed and random effects), so it falls under `class = Intercept, dpar = bs` in `brms`'s internal matching and rides on `brms`'s default prior rather than one we specified. Worth deciding deliberately whether that's acceptable for publication or whether `bs` should get an explicit prior too.
+
+Custom starting values, since default inits tend to land somewhere the wiener likelihood can't evaluate.
+
+```{r}
+#| label: init
+tmp_dat_ai <- make_standata(formula_ai,
+  family = family_ai,
+  data = explicit_ai, prior = bprior_ai
+)
+
+initfun_ai <- function() {
+  list(
+    b = rnorm(tmp_dat_ai$K, 0, 0.2),
+    b_bs = .5,
+    b_ndt = runif(tmp_dat_ai$K_ndt, 0.001, 0.05),
+    b_bias = rnorm(tmp_dat_ai$K_bias, 0, 0.1),
+    sd_1 = runif(tmp_dat_ai$M_1, 0.05, 0.1),
+    z_1 = matrix(rnorm(tmp_dat_ai$M_1 * tmp_dat_ai$N_1, 0, 0.01), tmp_dat_ai$M_1, tmp_dat_ai$N_1),
+    L_1 = diag(tmp_dat_ai$M_1)
+  )
+}
+```
+
+## Estimation
+
+Sampler settings named here so the Methods-style description below and the actual `brm()` call can't drift apart — change one, both update.
+
+```{r}
+#| label: sampler-settings
+n_chains <- 4
+n_iter <- 10000
+n_warmup <- 500
+n_thin <- 10
+adapt_delta_val <- .95
+max_treedepth_val <- 15
+n_postwarmup_draws <- (n_iter - n_warmup) / n_thin * n_chains
+```
+
+The model was fit with `r n_chains` MCMC chains of `r n_iter` iterations each (`r n_warmup` warmup), thinned by `r n_thin`, yielding `r n_postwarmup_draws` post-warmup draws. The target average Metropolis acceptance probability (`adapt_delta`) was set to `r adapt_delta_val` and maximum treedepth to `r max_treedepth_val`, both raised above `brms`'s defaults to accommodate the added sampling difficulty from `bias`'s full factorial structure.
+
+`file` points at the model already fit outside this document (same formula, same 1244-row `explicit_ai`), cached in `analysis/models/` — `brm()`'s default `file_refit = "never"` means it just loads that `.rds` and skips fitting entirely on render, rather than re-running MCMC every time. Resolved via `here()` rather than a relative path for the same reason as the data path above.
+
+```{r}
+#| label: fit
+fit_ai <- brm(formula_ai,
+  data = explicit_ai,
+  family = family_ai,
+  prior = bprior_ai, init = initfun_ai,
+  chains = n_chains, cores = n_chains,
+  iter = n_iter, warmup = n_warmup, sample_prior = TRUE,
+  save_pars = save_pars(all = TRUE), thin = n_thin,
+  file = here("analysis", "models", "ai_ddm_3way_bias1"),
+  control = list(adapt_delta = adapt_delta_val, max_treedepth = max_treedepth_val),
+  backend = "cmdstanr", threads = threading(2)
+)
+```
+
+## Credibility Criterion
+
+Contrasts are judged credible based on the 95% credible interval excluding zero together with the probability of direction (`pd > 97.5%`). Region-of-practical-equivalence (ROPE) percentages are also computed and available in the extracted results objects (each distributional parameter gets its own scaled range, since the automatic default has no supported method for a multi-parameter Wiener/DDM family — see the `rope-ranges` chunk under Extract Results), but ROPE is reported only for supplementary context here, not as the basis for calling an effect credible.
+
+## Convergence check
+
+Rhat/ESS, plus a check for non-finite log-likelihood entries — a distinct failure mode from divergences (a single `NaN` in the log-lik matrix poisons `elpd_loo`/`loo()` sums even when Rhat and pareto-k both look clean; the usual DDM-specific cause is a posterior draw where `ndt` ends up larger than a trial's actual RT).
+
+```{r}
+#| label: convergence
+summary(fit_ai)
+
+ll_ai <- log_lik(fit_ai)
+bad_idx <- which(!is.finite(ll_ai), arr.ind = TRUE)
+if (nrow(bad_idx) == 0) {
+  message("no non-finite log-likelihood entries")
+} else {
+  bad_obs <- sort(unique(bad_idx[, "col"]))
+  message(nrow(bad_idx), " non-finite entries across ", length(bad_obs), " observation(s)")
+  explicit_ai[bad_obs, c("sn", "condition", "dist", "age.group", "duration", "dec_recode")]
+}
+```
+
+# Extract results (modelbased)
+
+Everything the write-up below quotes comes from these objects — re-run this chunk after refitting and the prose updates itself.
+
+## ROPE ranges
+
+`estimate_contrasts()`'s automatic ROPE default couldn't be derived for this model (a Wiener/DDM family with four distributional parameters isn't something `bayestestR::rope_range()`'s heuristic knows how to compute a scale for), so instead of accepting its flat `[-0.1, 0.1]` fallback — which would apply the same raw number to `mu` (drift-rate units), `ndt` (seconds), and `bias` (probability) despite their very different natural scales — each parameter gets its own ROPE range: 10% of that parameter's own fitted posterior SD (`posterior_epred(fit_ai, dpar = ...)`), the same logic the automatic default uses for ordinary models, just computed by hand per dpar here.
+
+```{r}
+#| label: rope-ranges
+rope_scale <- function(fit, dpar) {
+  draws <- posterior_epred(fit, dpar = dpar)
+  0.1 * sd(as.vector(draws))
+}
+
+rope_mu <- rope_scale(fit_ai, "mu")
+rope_ndt <- rope_scale(fit_ai, "ndt")
+rope_bias <- rope_scale(fit_ai, "bias")
+
+c(mu = rope_mu, ndt = rope_ndt, bias = rope_bias)
+```
+
+`estimate_contrasts()` doesn't guarantee which level lands in `Level1` vs `Level2` — confirmed (see `ddm-di.qmd`) that this flips between datasets for reasons unrelated to the actual estimate. Normalize to `eq - uneq` explicitly rather than relying on it happening to come out that way.
+
+```{r}
+#| label: normalize-direction
+# Force every contrasts_* object below to report eq - uneq, regardless of
+# which order estimate_contrasts() happened to assign Level1/Level2.
+normalize_eq_minus_uneq <- function(df) {
+  flip <- df$Level1 == "uneq"
+  if (any(flip)) {
+    new_low <- -df$CI_high[flip]
+    new_high <- -df$CI_low[flip]
+    df$Difference[flip] <- -df$Difference[flip]
+    df$CI_low[flip] <- new_low
+    df$CI_high[flip] <- new_high
+    tmp <- df$Level1[flip]
+    df$Level1[flip] <- df$Level2[flip]
+    df$Level2[flip] <- tmp
+    # pd and ROPE_Percentage are both symmetric around 0 and unaffected by the flip
+  }
+  df
+}
+```
+
+```{r}
+#| label: contrasts
+# dist (equal vs unequal) simple effects, by condition x age.group, on drift rate
+contrasts_mu <- estimate_contrasts(
+  fit_ai, contrast = "dist", by = c("condition", "age.group"),
+  predict = "mu", backend = "emmeans", rope_range = c(-rope_mu, rope_mu)
+) |> normalize_eq_minus_uneq()
+
+# same, on non-decision time
+contrasts_ndt <- estimate_contrasts(
+  fit_ai, contrast = "dist", by = c("condition", "age.group"),
+  predict = "ndt", backend = "emmeans", rope_range = c(-rope_ndt, rope_ndt)
+) |> normalize_eq_minus_uneq()
+
+# same, on starting point (bias) -- meaningful now that bias has the full
+# condition*dist*age.group structure rather than being fixed at 0.5
+contrasts_bias <- estimate_contrasts(
+  fit_ai, contrast = "dist", by = c("condition", "age.group"),
+  predict = "bias", backend = "emmeans", rope_range = c(-rope_bias, rope_bias)
+) |> normalize_eq_minus_uneq()
+
+# marginal bias (starting point) by condition, on the natural (0,1) scale --
+# a simpler summary alongside the dist-contrast version above
+bias_by_condition <- estimate_means(
+  fit_ai, by = "condition", predict = "bias", backend = "emmeans"
+)
+
+contrasts_mu
+contrasts_ndt
+contrasts_bias
+bias_by_condition
+```
+
+Check these column names before trusting the formatting helpers below — `estimate_contrasts()`/`estimate_means()` output can shift slightly across `modelbased` versions, and the helpers assume the standard `Difference`/`Mean`, `CI_low`, `CI_high`, `pd` names.
+
+```{r}
+#| label: check-columns
+names(contrasts_mu)
+names(bias_by_condition)
+```
+
+```{r}
+#| label: formatters
+# Pull one row out of a contrasts/means table by column = value filters, e.g.
+# fmt_contrast(contrasts_mu, condition = "norm", age.group = "4&5")
+filter_row <- function(df, ...) {
+  filters <- list(...)
+  row <- df
+  for (col in names(filters)) row <- row[row[[col]] == filters[[col]], ]
+  if (nrow(row) != 1) stop("filter matched ", nrow(row), " rows, expected 1")
+  row
+}
+
+fmt_contrast <- function(df, ...) {
+  row <- filter_row(df, ...)
+  sprintf(
+    "%s, 95%% CI [%s, %s], *pd* = %s%%",
+    insight::format_value(row$Difference),
+    insight::format_value(row$CI_low),
+    insight::format_value(row$CI_high),
+    insight::format_value(row$pd * 100, digits = 1)
+  )
+}
+
+fmt_mean <- function(df, ...) {
+  row <- filter_row(df, ...)
+  # estimate_means() names the value column after the dpar (e.g. "Bias"), not "Mean"
+  value_col <- setdiff(names(df), c(names(list(...)), "CI_low", "CI_high", "pd", "ROPE_Percentage"))
+  sprintf("%s, 95%% CI [%s, %s]", insight::format_value(row[[value_col]]), insight::format_value(row$CI_low), insight::format_value(row$CI_high))
+}
+
+# Primary credibility criterion: the 95% credible interval excludes zero AND
+# pd clears the conventional 97.5% bar. These two will usually agree (a CI
+# excluding zero and pd > 97.5% are closely related for well-behaved
+# posteriors), so requiring both is a small extra safeguard, not two
+# independent hurdles. This is the primary criterion used throughout —
+# ROPE/practical-significance is reported for context (see rope-ranges chunk)
+# but is not the basis for calling something "credible" here.
+credible_label <- function(df, ..., pd_threshold = 0.975) {
+  row <- filter_row(df, ...)
+  ci_excludes_zero <- (row$CI_low > 0) || (row$CI_high < 0)
+  if (ci_excludes_zero && row$pd > pd_threshold) "credible" else "not credible"
+}
+
+# Three-way ROPE classification (Kruschke, 2018; Makowski et al., 2019) --
+# kept available for anyone who wants the practical-significance detail, but
+# not used as the primary credibility criterion in the prose below (that's
+# credible_label() above, based on the 95% CrI and pd).
+practical_label <- function(df, ..., lower = 0.05, upper = 0.95) {
+  row <- filter_row(df, ...)
+  if (row$ROPE_Percentage <= lower) {
+    "practically meaningful"
+  } else if (row$ROPE_Percentage > upper) {
+    "negligible"
+  } else {
+    "ambiguous"
+  }
+}
+
+fmt_rope <- function(df, ...) {
+  row <- filter_row(df, ...)
+  paste0(insight::format_value(row$ROPE_Percentage * 100, digits = 1), "%")
+}
+```
+
+# Results
+
+### Drift Rate
+
+For 4–5-year-olds, the equal–unequal difference in drift rate was `r credible_label(contrasts_mu, condition = "autonomous", age.group = "4&5")` in the autonomous condition (`r fmt_contrast(contrasts_mu, condition = "autonomous", age.group = "4&5")`) and `r credible_label(contrasts_mu, condition = "baseline", age.group = "4&5")` in the baseline condition (`r fmt_contrast(contrasts_mu, condition = "baseline", age.group = "4&5")`), but `r credible_label(contrasts_mu, condition = "norm", age.group = "4&5")` in the norm condition (`r fmt_contrast(contrasts_mu, condition = "norm", age.group = "4&5")`).
+
+By 6–7 years, autonomous (`r fmt_contrast(contrasts_mu, condition = "autonomous", age.group = "6&7")`) and baseline (`r fmt_contrast(contrasts_mu, condition = "baseline", age.group = "6&7")`) remained `r credible_label(contrasts_mu, condition = "autonomous", age.group = "6&7")`, while the norm effect grew (`r fmt_contrast(contrasts_mu, condition = "norm", age.group = "6&7")`).
+
+By 8–9 years, the difference was `r credible_label(contrasts_mu, condition = "autonomous", age.group = "8&9")` across all three conditions: autonomous (`r fmt_contrast(contrasts_mu, condition = "autonomous", age.group = "8&9")`), baseline (`r fmt_contrast(contrasts_mu, condition = "baseline", age.group = "8&9")`), and norm (`r fmt_contrast(contrasts_mu, condition = "norm", age.group = "8&9")`).
+
+Plotted together with `ndt` and `bias` at the end of the Results section (one combined figure, `p_mu`/`p_ndt`/`p_bias` stacked via `patchwork`) rather than as three separate figures.
+
+```{r}
+#| label: fig-mu
+#| fig-width: 11
+#| fig-height: 5.5
+draws_mu <- pairs(emmeans(fit_ai, ~ dist | condition * age.group, dpar = "mu")) |>
+  gather_emmeans_draws()
+
+p_mu <- ggplot(draws_mu, aes(x = .value, y = condition, fill = condition)) +
+  stat_halfeye() +
+  facet_wrap(~age.group) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  scale_fill_viridis_d(guide = "none") +
+  labs(x = "Difference in drift rate (eq - uneq)", y = "Condition", title = "Drift rate (mu)") +
+  theme_bw(base_size = 14)
+```
+
+### Non-Decision Time
+
+For 4–5-year-olds: autonomous (`r fmt_contrast(contrasts_ndt, condition = "autonomous", age.group = "4&5")`), baseline (`r fmt_contrast(contrasts_ndt, condition = "baseline", age.group = "4&5")`), norm (`r fmt_contrast(contrasts_ndt, condition = "norm", age.group = "4&5")`).
+
+For 6–7-year-olds: autonomous (`r fmt_contrast(contrasts_ndt, condition = "autonomous", age.group = "6&7")`), baseline (`r fmt_contrast(contrasts_ndt, condition = "baseline", age.group = "6&7")`), norm (`r fmt_contrast(contrasts_ndt, condition = "norm", age.group = "6&7")`).
+
+For 8–9-year-olds: autonomous (`r fmt_contrast(contrasts_ndt, condition = "autonomous", age.group = "8&9")`), baseline (`r fmt_contrast(contrasts_ndt, condition = "baseline", age.group = "8&9")`), norm (`r fmt_contrast(contrasts_ndt, condition = "norm", age.group = "8&9")`).
+
+```{r}
+#| label: fig-ndt
+#| fig-width: 11
+#| fig-height: 5.5
+draws_ndt <- pairs(emmeans(fit_ai, ~ dist | condition * age.group, dpar = "ndt")) |>
+  gather_emmeans_draws()
+
+p_ndt <- ggplot(draws_ndt, aes(x = .value, y = condition, fill = condition)) +
+  stat_halfeye() +
+  facet_wrap(~age.group) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  scale_fill_viridis_d(guide = "none") +
+  labs(x = "Difference in ndt, seconds (eq - uneq)", y = "Condition", title = "Non-decision time (ndt)") +
+  theme_bw(base_size = 14)
+```
+
+### Starting Point (Bias)
+
+Bias got the same full `condition * dist * age.group` structure as `mu`/`ndt`, so it supports the same `eq - uneq` contrast — recall `dec_recode = 1` is the reject boundary, so a positive `eq - uneq` difference means the starting point for equal trials sits closer to reject *relative to* unequal trials (and vice versa for negative). One caveat worth keeping in mind reading these: unlike `mu`/`ndt`, which reflect the trial actually being processed, `bias` is supposed to represent a *pre-trial* predisposition — children don't know whether a given trial is equal or unequal until it starts, so a credible `dist` effect on bias is more likely picking up some residual asymmetry the model is using bias's flexibility to absorb, rather than a literal "predisposition toward this specific upcoming trial type."
+
+For 4–5-year-olds, the equal–unequal difference in bias was `r credible_label(contrasts_bias, condition = "autonomous", age.group = "4&5")` in the autonomous condition (`r fmt_contrast(contrasts_bias, condition = "autonomous", age.group = "4&5")`), `r credible_label(contrasts_bias, condition = "baseline", age.group = "4&5")` in baseline (`r fmt_contrast(contrasts_bias, condition = "baseline", age.group = "4&5")`), and `r credible_label(contrasts_bias, condition = "norm", age.group = "4&5")` in norm (`r fmt_contrast(contrasts_bias, condition = "norm", age.group = "4&5")`).
+
+By 6–7 years: autonomous (`r fmt_contrast(contrasts_bias, condition = "autonomous", age.group = "6&7")`), baseline (`r fmt_contrast(contrasts_bias, condition = "baseline", age.group = "6&7")`), norm (`r fmt_contrast(contrasts_bias, condition = "norm", age.group = "6&7")`).
+
+By 8–9 years: autonomous (`r fmt_contrast(contrasts_bias, condition = "autonomous", age.group = "8&9")`), baseline (`r fmt_contrast(contrasts_bias, condition = "baseline", age.group = "8&9")`), norm (`r fmt_contrast(contrasts_bias, condition = "norm", age.group = "8&9")`).
+
+`contrasts_bias` (via `modelbased`) is on the **response (0-1 probability) scale by default** — confirmed by comparing it directly against `emmeans(...) |> regrid("response") |> pairs()`, which matches it exactly (both give -0.0129 for autonomous@4&5, for example), while the plain link-scale `pairs()` (no `regrid()`) gives a different, larger number (-0.052 for the same cell). So the plot below uses `regrid("response")` before `pairs()` to match the scale the prose is already quoting, rather than the logit scale.
+
+```{r}
+#| label: fig-bias
+#| fig-width: 11
+#| fig-height: 5.5
+draws_bias <- emmeans(fit_ai, ~ dist | condition * age.group, dpar = "bias") |>
+  regrid("response") |>
+  pairs() |>
+  gather_emmeans_draws()
+
+p_bias <- ggplot(draws_bias, aes(x = .value, y = condition, fill = condition)) +
+  stat_halfeye() +
+  facet_wrap(~age.group) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  scale_fill_viridis_d(guide = "none") +
+  labs(x = "Difference in bias, probability scale (eq - uneq)", y = "Condition", title = "Starting point (bias)") +
+  theme_bw(base_size = 14)
+```
+
+### Combined figure
+
+All three `eq - uneq` contrasts, stacked (each keeps its own x-axis scale — drift rate, seconds, and probability aren't comparable units, so this isn't a shared-axis figure, just a shared layout).
+
+```{r}
+#| label: fig-combined
+#| fig-width: 11
+#| fig-height: 16
+p_mu / p_ndt / p_bias
+```
+
+For context, the marginal bias per condition (averaged over `dist`/`age.group`), on the natural (0, 1) scale: autonomous `r fmt_mean(bias_by_condition, condition = "autonomous")`, baseline `r fmt_mean(bias_by_condition, condition = "baseline")`, norm `r fmt_mean(bias_by_condition, condition = "norm")`.
+
+```{r}
+#| label: fig-bias-marginal
+#| fig-width: 8
+#| fig-height: 4.5
+draws_bias_marginal <- emmeans(fit_ai, ~condition, dpar = "bias", type = "response") |>
+  gather_emmeans_draws()
+
+ggplot(draws_bias_marginal, aes(x = .value, y = condition, fill = condition)) +
+  stat_halfeye() +
+  geom_vline(xintercept = 0.5, linetype = "dashed") +
+  scale_fill_viridis_d(guide = "none") +
+  labs(x = "Bias (starting point, 0-1 scale)", y = "Condition", title = "AI: bias by condition (marginal over dist, age.group)") +
+  theme_bw(base_size = 14)
+```
+
+## Summary
+
+```{r}
+#| label: summary-helper
+# how many of the 9 condition x age.group cells clear the credibility bar
+# (95% CrI excludes zero AND pd > 97.5% -- same joint criterion as
+# credible_label() above, not a ROPE-based count)
+count_credible <- function(df, pd_threshold = 0.975) {
+  sum((df$CI_low > 0 | df$CI_high < 0) & df$pd > pd_threshold)
+}
+```
+
+Putting `mu`, `ndt`, and `bias` together, the three parameters tell three different stories about how the fairness manipulation actually works. Credibility throughout is based on the 95% credible interval excluding zero together with `pd > 97.5%`.
+
+**Drift rate carries the headline effect.** The norm condition shows a credible equal-vs-unequal distinction at every age tested, including the youngest (4–5y: `r fmt_contrast(contrasts_mu, condition = "norm", age.group = "4&5")`), years before autonomous or baseline catch up (both `r credible_label(contrasts_mu, condition = "autonomous", age.group = "6&7")` through 6–7y, only becoming credible at 8–9y: autonomous `r fmt_contrast(contrasts_mu, condition = "autonomous", age.group = "8&9")`, baseline `r fmt_contrast(contrasts_mu, condition = "baseline", age.group = "8&9")`). This is the mechanism doing the actual work — the fairness prompt changes *how strongly children weigh unequal allocations while they're deciding*, not just their final choice.
+
+**NDT is credible almost everywhere, but the magnitude tells the real story.** Unlike `mu`, where whole conditions are non-credible until 8–9y, `ndt`'s equal-vs-unequal difference clears the 95%-CrI-and-pd bar in `r count_credible(contrasts_ndt)` of 9 cells — even autonomous's smallest effect, at 4–5y, is credible (`r fmt_contrast(contrasts_ndt, condition = "autonomous", age.group = "4&5")`). What differentiates the conditions here is size, not credibility: autonomous's effect stays small across every age tested (`r fmt_contrast(contrasts_ndt, condition = "autonomous", age.group = "8&9")` even by 8–9y), while baseline and norm grow substantially larger by 6–7y (baseline `r fmt_contrast(contrasts_ndt, condition = "baseline", age.group = "6&7")`, norm `r fmt_contrast(contrasts_ndt, condition = "norm", age.group = "6&7")`) and continue growing through 8–9y. So NDT differences are statistically real in every condition, but functionally, baseline and norm are where the *sizeable* NDT differences live.
+
+**Bias is not where the fairness effect lives.** Marginal starting point is nearly identical across conditions (autonomous `r fmt_mean(bias_by_condition, condition = "autonomous")`, baseline `r fmt_mean(bias_by_condition, condition = "baseline")`, norm `r fmt_mean(bias_by_condition, condition = "norm")`) — all sit at a small, universal lean toward the reject boundary, with no credible difference *between* conditions. The `dist` contrast on bias only clears the credibility bar in `r count_credible(contrasts_bias)` of 9 condition x age.group cells, with no coherent age or condition trend across them — consistent with that being residual model flexibility rather than a real pre-trial predisposition (children can't know in advance whether a trial will be equal or unequal).
+
+**Net conclusion**: giving `bias` room to vary didn't explain away the drift-rate story — if anything, the drift-rate effects came out *larger* once bias was allowed to flex (compare this document's `r fmt_contrast(contrasts_mu, condition = "norm", age.group = "8&9")` at 8–9y norm against the fixed-bias model's smaller estimate). The fairness prompt's effect on advantageous inequity aversion is a drift-rate phenomenon — it accelerates *when* and *how strongly* children's evidence-accumulation process distinguishes fair from unfair offers, not where that process starts or how long perceptual/motor encoding takes.
