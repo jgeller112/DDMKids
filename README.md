@@ -50,11 +50,6 @@ LICENSE                             MIT
 
 ## Running the analysis
 
-> **Note:** there is no `.Rproj` file at the repo root anymore; `here::here()`
-> will instead resolve the project root from the `.git` directory, so start
-> R with the repo root as the working directory (or open the repo folder in
-> RStudio) so paths still resolve correctly.
-
 Then render any document with Quarto:
 
 ```r
