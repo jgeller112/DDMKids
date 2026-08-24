@@ -27,8 +27,6 @@ Scripts/
 analysis/
   ai/ddm-ai.qmd                     AI-group model, results, and write-up
   di/ddm-di.qmd                     DI-group model, results, and write-up
-  ddm-comparison.qmd                Loads both fitted models and compares them
-                                     directly (no refitting)
   models/
     ai_ddm_3way_bias1.rds           Cached AI model fit
     di_3way_full.rds                Cached DI model fit
@@ -92,16 +90,15 @@ Then render any document with Quarto:
 ```r
 quarto::quarto_render("analysis/ai/ddm-ai.qmd")
 quarto::quarto_render("analysis/di/ddm-di.qmd")
-quarto::quarto_render("analysis/ddm-comparison.qmd")
 ```
 
-All three load their models from `analysis/models/*.rds` by default
+Both load their models from `analysis/models/*.rds` by default
 (`brms`'s `file_refit = "never"`) rather than refitting — delete the
 relevant `.rds` to force a fresh fit. Fitting from scratch requires
 `cmdstanr` with a working CmdStan installation.
 
 Every number quoted in the `## Results`/`## Summary`/`## Conclusion`
-prose in all three documents is pulled live from the fitted models via
+prose in both documents is pulled live from the fitted models via
 inline R (`modelbased::estimate_contrasts()` + small formatting helpers
 defined in each document) — nothing is hand-typed, so re-running a
 document after refitting updates the write-up automatically.
