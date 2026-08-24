@@ -48,6 +48,43 @@ archive/                            Orphaned files from earlier iterations, not
 LICENSE                             MIT
 ```
 
+## Environment (renv)
+
+Package versions are pinned with [`renv`](https://rstudio.github.io/renv/)
+(`renv.lock`), so the analysis reproduces on another machine instead of
+drifting as packages update.
+
+**First time setup:**
+
+```r
+install.packages("renv")   # if not already installed
+renv::restore()            # installs the exact package versions from renv.lock
+```
+
+`renv::restore()` reads `renv.lock` and installs every package (including
+`cmdstanr`, from the `stan-dev` r-universe repo) into an isolated,
+project-local library under `renv/library/` — it won't touch or be affected
+by packages installed elsewhere on your system.
+
+Once restored, just open the project in this directory as usual (or `cd`
+into it and start R) — `.Rprofile` activates the project library
+automatically via `source("renv/activate.R")`.
+
+**Note on CmdStan itself:** `renv` manages the `cmdstanr` *R package* but not
+the CmdStan *toolchain* it drives. If `cmdstanr::cmdstan_version()` errors,
+install CmdStan separately with:
+
+```r
+cmdstanr::install_cmdstan()
+```
+
+**If you add or update a package** while working on the analysis, record it
+in the lockfile before committing:
+
+```r
+renv::snapshot()
+```
+
 ## Running the analysis
 
 Then render any document with Quarto:
