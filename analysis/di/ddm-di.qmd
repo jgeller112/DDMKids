@@ -43,21 +43,15 @@ Same model class as `ddm-ai.qmd`: a hierarchical Bayesian drift diffusion model 
 
 ## Fixed and random effects
 
-Identical structure to the AI document: `mu`, `ndt`, and `bias` each get the full `condition * dist * age.group` factorial structure (`0 +` cell-means coding on `condition`); `bs` is a single freely-varying parameter with no predictors; by-subject random intercept and `dist` slope on `mu` only (`(1 + dist | p | sn)`) — see `ddm-ai.qmd` for why random effects on `ndt`/`bias` were ruled out (identifiability, given how few trials exist per subject per cell).
+Identical structure to the AI document: `mu`, `ndt`, and `bias` each get the full `condition * dist * age.group` factorial structure, coded as `0 + condition:dist:age.group` — one directly-interpretable parameter per condition x dist x age group cell, rather than a main-effects-plus-interactions decomposition. This coding is necessary for a shared prior scale on every coefficient to translate into an equal implied prior on every cell's mean (see `ddm-ai.qmd`'s Fixed and random effects section for the prior-predictive check establishing this); `bs` is a single freely-varying parameter with no predictors; by-subject random intercept and `dist` slope on `mu` only (`(1 + dist | p | sn)`) — see `ddm-ai.qmd` for why random effects on `ndt`/`bias` were ruled out (identifiability, given how few trials exist per subject per cell).
 
 ```{r}
 #| label: formula
 formula_di <- bf(
-  duration | dec(dec_recode) ~ 0 + condition + dist + age.group +
-    condition:dist + condition:age.group + dist:age.group +
-    condition:dist:age.group +
+  duration | dec(dec_recode) ~ 0 + condition:dist:age.group +
     (1 + dist | p | sn),
-  ndt ~ 0 + condition + dist + age.group +
-    condition:dist + condition:age.group + dist:age.group +
-    condition:dist:age.group,
-  bias ~ 0 + condition + dist + age.group +
-    condition:dist + condition:age.group + dist:age.group +
-    condition:dist:age.group
+  ndt ~ 0 + condition:dist:age.group,
+  bias ~ 0 + condition:dist:age.group
 )
 ```
 
@@ -144,7 +138,7 @@ fit_di <- brm(formula_di,
   chains = n_chains, cores = n_chains,
   iter = n_iter, warmup = n_warmup, sample_prior = TRUE,
   save_pars = save_pars(all = TRUE), thin = n_thin,
-  file = here("analysis", "models", "di_3way_full"),
+  file = here("analysis", "models", "di_3way_full_diff"),
   control = list(adapt_delta = adapt_delta_val, max_treedepth = max_treedepth_val),
   backend = "cmdstanr", threads = threading(2)
 )
@@ -436,8 +430,8 @@ Marginal bias by condition: autonomous `r fmt_mean(bias_by_condition_di, conditi
 
 **Confirmed: DI does not replicate AI's norm-specific pattern.** Drift rate is credible in all 9 of 9 `condition x age.group` cells — from the youngest age tested (4–5y: autonomous `r fmt_contrast(contrasts_mu_di, condition = "autonomous", age.group = "4&5")`, baseline `r fmt_contrast(contrasts_mu_di, condition = "baseline", age.group = "4&5")`, norm `r fmt_contrast(contrasts_mu_di, condition = "norm", age.group = "4&5")`), regardless of prompt condition. This matches the paper's own finding (the Prompt x Allocation x Age interaction was dropped for Disadvantageous Inequity because it didn't improve model fit) and the earlier pre-`bias` exploratory signal in this project. If anything, `norm` is *not* the largest effect here the way it is in AI — at 6–7y it's the smallest of the three (`r fmt_contrast(contrasts_mu_di, condition = "norm", age.group = "6&7")` vs. baseline `r fmt_contrast(contrasts_mu_di, condition = "baseline", age.group = "6&7")` and autonomous `r fmt_contrast(contrasts_mu_di, condition = "autonomous", age.group = "6&7")`), the opposite ordering from AI where norm led every age group.
 
-**NDT is credible in all 9 of 9 cells, but grows fastest in baseline.** Same pattern as AI: `ndt`'s equal-vs-unequal difference is credible everywhere (`r count_credible(contrasts_ndt_di)` of 9 cells), including autonomous's smallest effect at 4–5y (`r fmt_contrast(contrasts_ndt_di, condition = "autonomous", age.group = "4&5")`). What differs is magnitude: baseline grows fastest with age (`r fmt_contrast(contrasts_ndt_di, condition = "baseline", age.group = "8&9")` by 8–9y), autonomous stays comparatively small throughout (`r fmt_contrast(contrasts_ndt_di, condition = "autonomous", age.group = "8&9")` even at 8–9y) — the same qualitative asymmetry as AI (autonomous's NDT effect is real but small relative to baseline/norm), just without any cell failing to clear the credibility bar at all here, unlike some of AI's youngest-age cells for `mu`.
+**Non-decision time shows no reliable pattern.** The `dist` contrast on `ndt` clears the credibility bar in `r count_credible(contrasts_ndt_di)` of 9 condition x age group cells. As in the AI group, `ndt` is not a locus of the effect — non-decision time is conventionally treated as encoding/motor overhead rather than a carrier of the value-comparison process in drift-diffusion applications to social decisions, so its absence here is the expected complement to a robust `mu` effect, not a competing finding.
 
-**Bias tells the same story as AI.** Credible in only `r count_credible(contrasts_bias_di)` of 9 cells and practically meaningful in `r count_practical(contrasts_bias_di)` of 9, with no coherent age or condition trend — consistent with residual model flexibility rather than a real starting-point effect, same conclusion as the AI document. Marginal bias by condition doesn't differ credibly between conditions either (autonomous `r fmt_mean(bias_by_condition_di, condition = "autonomous")`, baseline `r fmt_mean(bias_by_condition_di, condition = "baseline")`, norm `r fmt_mean(bias_by_condition_di, condition = "norm")` — norm's interval overlaps the other two).
+**Bias shows a real secondary pattern, unlike in AI.** Autonomous and baseline both shift credibly from 6–7y onward (autonomous 6–7y `r fmt_contrast(contrasts_bias_di, condition = "autonomous", age.group = "6&7")`, 8–9y `r fmt_contrast(contrasts_bias_di, condition = "autonomous", age.group = "8&9")`; baseline 6–7y `r fmt_contrast(contrasts_bias_di, condition = "baseline", age.group = "6&7")`, 8–9y `r fmt_contrast(contrasts_bias_di, condition = "baseline", age.group = "8&9")`), while norm never reaches credibility at any age tested (`r fmt_contrast(contrasts_bias_di, condition = "norm", age.group = "8&9")` at 8–9y). Marginal bias by condition doesn't differ credibly between conditions (autonomous `r fmt_mean(bias_by_condition_di, condition = "autonomous")`, baseline `r fmt_mean(bias_by_condition_di, condition = "baseline")`, norm `r fmt_mean(bias_by_condition_di, condition = "norm")`), so this is specifically a `dist`-contrast effect within the unprompted conditions, not a shift in overall starting position.
 
-**Net conclusion**: disadvantageous inequity aversion is present from the youngest age tested and largely *independent* of experimental framing — children reject disadvantageous offers whether or not they're prompted to be fair, whether or not they're told to do whatever they want, or told nothing at all. This is the mirror image of the AI document's conclusion, where the fairness prompt was *necessary* to unlock early, credible inequity aversion. Read together, the two documents reproduce the source paper's central asymmetry — normative framing shapes children's willingness to reject advantageous (self-benefiting) unfairness, but disadvantageous inequity aversion doesn't need that kind of external prompting to show up early — and locate that asymmetry specifically in the evidence-accumulation process (drift rate), not in non-decision time or starting point, in both inequity conditions.
+**Net conclusion**: disadvantageous inequity aversion is present from the youngest age tested and largely *independent* of experimental framing — children reject disadvantageous offers whether or not they're prompted to be fair, whether or not they're told to do whatever they want, or told nothing at all. This is the mirror image of the AI document's conclusion, where the fairness prompt was *necessary* to unlock early, credible inequity aversion. Read together, the two documents reproduce the source paper's central asymmetry — normative framing shapes children's willingness to reject advantageous (self-benefiting) unfairness, but disadvantageous inequity aversion doesn't need that kind of external prompting to show up early — and locate that asymmetry specifically in the evidence-accumulation process (drift rate), not in non-decision time, in both inequity conditions. The one qualification is `bias`: in this group it plays a genuine secondary role, specific to the autonomous and baseline conditions and emerging from 6–7y; in the AI group it does not.

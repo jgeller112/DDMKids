@@ -1,0 +1,280 @@
+---
+title: "DDM — Advantageous and Disadvantageous Inequity"
+format: html
+editor: visual
+---
+
+# Setup
+
+```{r}
+#| label: load packages
+library(tidyverse)
+library(brms)
+library(cmdstanr)
+library(emmeans)
+library(reformulas)
+library(easystats)
+library(modelbased)
+library(tidybayes)
+library(patchwork)
+library(knitr)
+library(here)
+
+options(
+  scipen = 999,
+  marginaleffects_posterior_center = mean,
+  brms.short_summary = TRUE,
+  rms.backend = Sys.getenv("BRMS_BACKEND", "cmdstanr"),
+  brms.threads = as.numeric(Sys.getenv("BRMS_THREADS", 2)),
+  mc.cores = as.numeric(Sys.getenv("MAX_CORES", 4))
+)
+```
+
+Shared preprocessing lives in `Scripts/data_prep.R`, producing `explicit_ai` and `explicit_di` from a single exclusion pipeline so the two groups can't drift out of sync on criteria.
+
+```{r}
+#| label: data
+source(here("Scripts", "data_prep.R"))
+```
+
+## Model parameterization
+
+Both groups are modeled with a hierarchical Bayesian drift diffusion model (the Wiener process; Ratcliff, 1978), fit via `brms` (Bürkner, 2017) through Stan (Carpenter et al., 2017) with the `cmdstanr` backend. Each trial's response time and binary choice are decomposed into **drift rate** (`mu`), **non-decision time** (`ndt`), **starting point** (`bias`), and **boundary separation** (`bs`).
+
+`mu`, `ndt`, and `bias` each get the full `condition * dist * age.group` factorial structure, coded as `0 + condition:dist:age.group` — one directly-interpretable parameter per condition x dist x age group cell, rather than a main-effects-plus-interactions decomposition. This coding is necessary for a shared prior scale on every coefficient to translate into an equal implied prior on every cell's mean: a prior-predictive check (posterior draws generated from the prior alone, likelihood switched off) showed that the conventional decomposition gives up to 2.7-fold differences in implied prior SD across cells — systematically tighter for cells reached via fewer summed coefficients — while the cell-means coding used here flattens that to within 5-11%. `bs` is a single freely-varying parameter with no predictors. By-subject random intercepts and slopes for `dist` are included on `mu` only (`(1 + dist | p | sn)`); random effects on `ndt` and `bias` were explored during model development and abandoned after producing severe divergences, consistent with too few trials per subject per cell to separate those individual differences from individual differences in drift rate.
+
+Priors are identical in structure for both groups: `normal(0, 1)` on every `mu` and `bias` coefficient, `normal(0.3, 0.1)` bounded to `[0, min_Y]` on every `ndt` coefficient, `normal(0, 0.03)` on the by-subject random-effect SDs.
+
+```{r}
+#| label: family
+family_wiener <- wiener(link_bs = "identity", link_ndt = "identity", link_bias = "logit")
+```
+
+Credibility throughout is defined as the 95% credible interval excluding zero together with `pd > 97.5%`. ROPE percentages are available in the extracted results objects but are not the basis for calling an effect credible.
+
+```{r}
+#| label: sampler-settings
+n_chains <- 4
+n_iter <- 10000
+n_warmup <- 500
+n_thin <- 10
+adapt_delta_val <- .95
+max_treedepth_val <- 15
+n_postwarmup_draws <- (n_iter - n_warmup) / n_thin * n_chains
+```
+
+```{r}
+#| label: shared-helpers
+normalize_eq_minus_uneq <- function(df) {
+  flip <- df$Level1 == "uneq"
+  if (any(flip)) {
+    new_low <- -df$CI_high[flip]
+    new_high <- -df$CI_low[flip]
+    df$Difference[flip] <- -df$Difference[flip]
+    df$CI_low[flip] <- new_low
+    df$CI_high[flip] <- new_high
+    tmp <- df$Level1[flip]
+    df$Level1[flip] <- df$Level2[flip]
+    df$Level2[flip] <- tmp
+  }
+  df
+}
+
+rope_scale <- function(fit, dpar) {
+  draws <- posterior_epred(fit, dpar = dpar)
+  0.1 * sd(as.vector(draws))
+}
+
+filter_row <- function(df, ...) {
+  filters <- list(...)
+  row <- df
+  for (col in names(filters)) row <- row[row[[col]] == filters[[col]], ]
+  if (nrow(row) != 1) stop("filter matched ", nrow(row), " rows, expected 1")
+  row
+}
+
+fmt_contrast <- function(df, ...) {
+  row <- filter_row(df, ...)
+  sprintf(
+    "%s, 95%% CI [%s, %s], *pd* = %s%%",
+    insight::format_value(row$Difference),
+    insight::format_value(row$CI_low),
+    insight::format_value(row$CI_high),
+    insight::format_value(row$pd * 100, digits = 1)
+  )
+}
+
+fmt_mean <- function(df, ...) {
+  row <- filter_row(df, ...)
+  value_col <- setdiff(names(df), c(names(list(...)), "CI_low", "CI_high", "pd", "ROPE_Percentage"))
+  sprintf("%s, 95%% CI [%s, %s]", insight::format_value(row[[value_col]]), insight::format_value(row$CI_low), insight::format_value(row$CI_high))
+}
+
+credible_label <- function(df, ..., pd_threshold = 0.975) {
+  row <- filter_row(df, ...)
+  ci_excludes_zero <- (row$CI_low > 0) || (row$CI_high < 0)
+  if (ci_excludes_zero && row$pd > pd_threshold) "credible" else "not credible"
+}
+
+count_credible <- function(df, pd_threshold = 0.975) {
+  sum((df$CI_low > 0 | df$CI_high < 0) & df$pd > pd_threshold)
+}
+```
+
+# Advantageous Inequity (AI) Group
+
+```{r}
+#| label: ai-formula
+formula_ai <- bf(
+  duration | dec(dec_recode) ~ 0 + condition:dist:age.group +
+    (1 + dist | p | sn),
+  ndt ~ 0 + condition:dist:age.group,
+  bias ~ 0 + condition:dist:age.group
+)
+
+bprior_ai <-
+  prior(normal(0, 1), class = b) +
+  prior(normal(0.3, 0.1), class = b, dpar = ndt, lb = 0, ub = "min_Y") +
+  prior(normal(0, 1), class = b, dpar = bias) +
+  prior(normal(0, 0.03), class = sd, group = sn, lb = 0)
+
+tmp_dat_ai <- make_standata(formula_ai, family = family_wiener, data = explicit_ai, prior = bprior_ai)
+
+initfun_ai <- function() {
+  list(
+    b = rnorm(tmp_dat_ai$K, 0, 0.2),
+    b_bs = .5,
+    b_ndt = runif(tmp_dat_ai$K_ndt, 0.001, 0.05),
+    b_bias = rnorm(tmp_dat_ai$K_bias, 0, 0.1),
+    sd_1 = runif(tmp_dat_ai$M_1, 0.05, 0.1),
+    z_1 = matrix(rnorm(tmp_dat_ai$M_1 * tmp_dat_ai$N_1, 0, 0.01), tmp_dat_ai$M_1, tmp_dat_ai$N_1),
+    L_1 = diag(tmp_dat_ai$M_1)
+  )
+}
+```
+
+```{r}
+#| label: ai-fit
+fit_ai <- brm(formula_ai,
+  data = explicit_ai,
+  family = family_wiener,
+  prior = bprior_ai, init = initfun_ai,
+  chains = n_chains, cores = n_chains,
+  iter = n_iter, warmup = n_warmup, sample_prior = TRUE,
+  save_pars = save_pars(all = TRUE), thin = n_thin,
+  file = here("analysis", "models", "ai_ddm_3way_bias1_diff"),
+  control = list(adapt_delta = adapt_delta_val, max_treedepth = max_treedepth_val),
+  backend = "cmdstanr", threads = threading(2)
+)
+
+summary(fit_ai)
+```
+
+```{r}
+#| label: ai-contrasts
+rope_mu_ai <- rope_scale(fit_ai, "mu")
+rope_ndt_ai <- rope_scale(fit_ai, "ndt")
+rope_bias_ai <- rope_scale(fit_ai, "bias")
+
+contrasts_mu_ai <- estimate_contrasts(fit_ai, contrast = "dist", by = c("condition", "age.group"),
+  predict = "mu", backend = "emmeans", rope_range = c(-rope_mu_ai, rope_mu_ai)) |> normalize_eq_minus_uneq()
+contrasts_ndt_ai <- estimate_contrasts(fit_ai, contrast = "dist", by = c("condition", "age.group"),
+  predict = "ndt", backend = "emmeans", rope_range = c(-rope_ndt_ai, rope_ndt_ai)) |> normalize_eq_minus_uneq()
+contrasts_bias_ai <- estimate_contrasts(fit_ai, contrast = "dist", by = c("condition", "age.group"),
+  predict = "bias", backend = "emmeans", rope_range = c(-rope_bias_ai, rope_bias_ai)) |> normalize_eq_minus_uneq()
+bias_by_condition_ai <- estimate_means(fit_ai, by = "condition", predict = "bias", backend = "emmeans")
+```
+
+## Results
+
+**Drift rate.** No condition shows a credible equal-vs-unequal distinction at 4–5y. Norm is the first condition to reach credibility, at 6–7y (`r fmt_contrast(contrasts_mu_ai, condition = "norm", age.group = "6&7")`), while autonomous and baseline remain `r credible_label(contrasts_mu_ai, condition = "autonomous", age.group = "6&7")` at that age. By 8–9y all three conditions are credible: autonomous `r fmt_contrast(contrasts_mu_ai, condition = "autonomous", age.group = "8&9")`, baseline `r fmt_contrast(contrasts_mu_ai, condition = "baseline", age.group = "8&9")`, norm `r fmt_contrast(contrasts_mu_ai, condition = "norm", age.group = "8&9")`. The age-8-9 threshold for autonomous and baseline is consistent with the developmental literature on advantageous inequity aversion, which typically places its emergence around 8-9 years (Blake & McAuliffe, 2011); the norm condition's earlier emergence is consistent with explicit fairness framing pulling that sensitivity forward relative to its unprompted timeline.
+
+**Non-decision time.** The `dist` contrast on `ndt` clears the credibility bar in `r count_credible(contrasts_ndt_ai)` of 9 condition x age group cells, and the credible cells do not share a consistent sign or a coherent age or condition trend. `ndt` is not a locus of the fairness manipulation's effect.
+
+**Starting point.** Marginal starting point is nearly identical across conditions (autonomous `r fmt_mean(bias_by_condition_ai, condition = "autonomous")`, baseline `r fmt_mean(bias_by_condition_ai, condition = "baseline")`, norm `r fmt_mean(bias_by_condition_ai, condition = "norm")`), with no credible difference between conditions. The `dist` contrast on `bias` clears the credibility bar in `r count_credible(contrasts_bias_ai)` of 9 cells, with no coherent age or condition trend.
+
+**Summary.** The fairness prompt's effect on advantageous inequity aversion is a drift-rate phenomenon. Neither `bias` nor `ndt`, despite being given the same full factorial flexibility as `mu`, absorbs a comparable share of the effect. The fairness prompt changes how strongly and how early children's evidence-accumulation process distinguishes fair from unfair offers, not where that process starts or how long perceptual/motor encoding takes.
+
+# Disadvantageous Inequity (DI) Group
+
+```{r}
+#| label: di-formula
+formula_di <- bf(
+  duration | dec(dec_recode) ~ 0 + condition:dist:age.group +
+    (1 + dist | p | sn),
+  ndt ~ 0 + condition:dist:age.group,
+  bias ~ 0 + condition:dist:age.group
+)
+
+bprior_di <-
+  prior(normal(0, 1), class = b) +
+  prior(normal(0.3, 0.1), class = b, dpar = ndt, lb = 0, ub = "min_Y") +
+  prior(normal(0, 1), class = b, dpar = bias) +
+  prior(normal(0, 0.03), class = sd, group = sn, lb = 0)
+
+tmp_dat_di <- make_standata(formula_di, family = family_wiener, data = explicit_di, prior = bprior_di)
+
+initfun_di <- function() {
+  list(
+    b = rnorm(tmp_dat_di$K, 0, 0.2),
+    b_bs = .5,
+    b_ndt = runif(tmp_dat_di$K_ndt, 0.001, 0.05),
+    b_bias = rnorm(tmp_dat_di$K_bias, 0, 0.1),
+    sd_1 = runif(tmp_dat_di$M_1, 0.05, 0.1),
+    z_1 = matrix(rnorm(tmp_dat_di$M_1 * tmp_dat_di$N_1, 0, 0.01), tmp_dat_di$M_1, tmp_dat_di$N_1),
+    L_1 = diag(tmp_dat_di$M_1)
+  )
+}
+```
+
+```{r}
+#| label: di-fit
+fit_di <- brm(formula_di,
+  data = explicit_di,
+  family = family_wiener,
+  prior = bprior_di, init = initfun_di,
+  chains = n_chains, cores = n_chains,
+  iter = n_iter, warmup = n_warmup, sample_prior = TRUE,
+  save_pars = save_pars(all = TRUE), thin = n_thin,
+  file = here("analysis", "models", "di_3way_full_diff"),
+  control = list(adapt_delta = adapt_delta_val, max_treedepth = max_treedepth_val),
+  backend = "cmdstanr", threads = threading(2)
+)
+
+summary(fit_di)
+```
+
+```{r}
+#| label: di-contrasts
+rope_mu_di <- rope_scale(fit_di, "mu")
+rope_ndt_di <- rope_scale(fit_di, "ndt")
+rope_bias_di <- rope_scale(fit_di, "bias")
+
+contrasts_mu_di <- estimate_contrasts(fit_di, contrast = "dist", by = c("condition", "age.group"),
+  predict = "mu", backend = "emmeans", rope_range = c(-rope_mu_di, rope_mu_di)) |> normalize_eq_minus_uneq()
+contrasts_ndt_di <- estimate_contrasts(fit_di, contrast = "dist", by = c("condition", "age.group"),
+  predict = "ndt", backend = "emmeans", rope_range = c(-rope_ndt_di, rope_ndt_di)) |> normalize_eq_minus_uneq()
+contrasts_bias_di <- estimate_contrasts(fit_di, contrast = "dist", by = c("condition", "age.group"),
+  predict = "bias", backend = "emmeans", rope_range = c(-rope_bias_di, rope_bias_di)) |> normalize_eq_minus_uneq()
+bias_by_condition_di <- estimate_means(fit_di, by = "condition", predict = "bias", backend = "emmeans")
+```
+
+## Results
+
+**Drift rate.** Unlike AI, the equal-vs-unequal distinction in drift rate is credible in all 9 of 9 condition x age group cells, from the youngest age tested (4–5y: autonomous `r fmt_contrast(contrasts_mu_di, condition = "autonomous", age.group = "4&5")`, baseline `r fmt_contrast(contrasts_mu_di, condition = "baseline", age.group = "4&5")`, norm `r fmt_contrast(contrasts_mu_di, condition = "norm", age.group = "4&5")`), regardless of prompt condition. Framing does not gate the effect the way it does for advantageous inequity; if anything, norm is the smallest of the three conditions at 6–7y (`r fmt_contrast(contrasts_mu_di, condition = "norm", age.group = "6&7")` vs. baseline `r fmt_contrast(contrasts_mu_di, condition = "baseline", age.group = "6&7")` and autonomous `r fmt_contrast(contrasts_mu_di, condition = "autonomous", age.group = "6&7")`), the opposite ordering from AI, where norm led every age group tested.
+
+**Non-decision time.** The `dist` contrast on `ndt` clears the credibility bar in `r count_credible(contrasts_ndt_di)` of 9 cells. As in the AI group, `ndt` is not a locus of the disadvantageous-inequity effect.
+
+**Starting point.** Starting point shows a real secondary pattern in this group: autonomous and baseline both shift credibly from 6–7y onward (autonomous 6–7y `r fmt_contrast(contrasts_bias_di, condition = "autonomous", age.group = "6&7")`, 8–9y `r fmt_contrast(contrasts_bias_di, condition = "autonomous", age.group = "8&9")`; baseline 6–7y `r fmt_contrast(contrasts_bias_di, condition = "baseline", age.group = "6&7")`, 8–9y `r fmt_contrast(contrasts_bias_di, condition = "baseline", age.group = "8&9")`), while norm never reaches credibility at any age tested (`r fmt_contrast(contrasts_bias_di, condition = "norm", age.group = "8&9")` at 8–9y). Marginal starting point does not differ credibly between conditions (autonomous `r fmt_mean(bias_by_condition_di, condition = "autonomous")`, baseline `r fmt_mean(bias_by_condition_di, condition = "baseline")`, norm `r fmt_mean(bias_by_condition_di, condition = "norm")`).
+
+**Summary.** Disadvantageous inequity aversion is present from the youngest age tested and largely independent of experimental framing, carried by drift rate. Unlike in the AI group, `bias` shows a secondary, age-emerging pattern specific to the autonomous and baseline conditions, absent in norm; `ndt` does not contribute to either group's effect.
+
+# Cross-Group Comparison
+
+Put side by side, the two groups tell a story about *when* fairness starts to matter to children — and it turns out the answer depends entirely on whose interest is at stake.
+
+When the unfair split works against them, children don't need any encouragement to object. From the youngest age we tested (4–5y) right through 8–9y, and regardless of whether they'd been prompted to be fair, told to do whatever they liked, or given no framing at all, disadvantageous offers were met with the same credible pushback in every condition. This is a distinction children appear to arrive at on their own, early, and it doesn't move much no matter what an adult tells them beforehand.
+
+When the unfair split works in their *own* favor, the story is slower and much more responsive to context. Left to their own devices (the autonomous and baseline conditions), children don't reliably start objecting to advantageous unfairness until 8–9y — a good two to three years behind their objection to disadvantageous unfairness, and consistent with prior developmental work placing advantageous inequity aversion's spontaneous emergence around that age. But an explicit nudge toward fairness — simply being told the game should be fair — brings that same sensitivity forward to 6–7y. Fairness toward others isn't absent in younger children so much as it's dormant, waiting on either more years or the right prompt to switch on.
+
+What's striking is *where* in the decision this asymmetry actually lives. It isn't that framed or older children take longer to respond, or that they walk in already leaning one way before a trial even starts — both non-decision time and starting point turned out, once the models were built correctly, to carry essentially no reliable signal in either group. The whole story is carried by drift rate: how quickly and how strongly the evidence that "this is unfair" accumulates while a child is actually looking at the offer. That's the mechanism framing speeds up, and the mechanism that needs no help at all when the unfairness cuts against someone else. The one place this tidy picture picks up an extra wrinkle is starting point in the disadvantageous group, where autonomous and baseline children's initial lean does shift credibly from 6–7y onward — a real but secondary effect, and one with no counterpart on the advantageous side.
