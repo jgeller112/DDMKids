@@ -269,6 +269,96 @@ bias_by_condition_di <- estimate_means(fit_di, by = "condition", predict = "bias
 
 **Summary.** Disadvantageous inequity aversion is present from the youngest age tested and largely independent of experimental framing, carried by drift rate. Unlike in the AI group, `bias` shows a secondary, age-emerging pattern specific to the autonomous and baseline conditions, absent in norm; `ndt` does not contribute to either group's effect.
 
+# Combined Figures
+
+Each parameter gets one figure spanning both groups, rows for AI vs. DI and columns for age group, so the two groups' patterns sit directly above and below each other rather than in separate documents. Condition is encoded by both fill color and y-axis position (redundant on purpose, since the labels alone already disambiguate condition — color reinforces rather than carries the identity), using three colors chosen to stay visually distinct for readers with color vision deficiencies as well as typical color vision.
+
+```{r}
+#| label: combined-figure-setup
+condition_colors <- c(autonomous = "#2a78d6", baseline = "#eb6834", norm = "#1baf7a")
+
+draws_mu_ai <- pairs(emmeans(fit_ai, ~ dist | condition * age.group, dpar = "mu")) |>
+  gather_emmeans_draws() |> mutate(group = "AI")
+draws_mu_di <- pairs(emmeans(fit_di, ~ dist | condition * age.group, dpar = "mu")) |>
+  gather_emmeans_draws() |> mutate(group = "DI")
+draws_mu_both <- bind_rows(draws_mu_ai, draws_mu_di) |>
+  mutate(group = factor(group, levels = c("AI", "DI")))
+
+draws_ndt_ai <- pairs(emmeans(fit_ai, ~ dist | condition * age.group, dpar = "ndt")) |>
+  gather_emmeans_draws() |> mutate(group = "AI")
+draws_ndt_di <- pairs(emmeans(fit_di, ~ dist | condition * age.group, dpar = "ndt")) |>
+  gather_emmeans_draws() |> mutate(group = "DI")
+draws_ndt_both <- bind_rows(draws_ndt_ai, draws_ndt_di) |>
+  mutate(group = factor(group, levels = c("AI", "DI")))
+
+draws_bias_ai <- emmeans(fit_ai, ~ dist | condition * age.group, dpar = "bias") |>
+  regrid("response") |> pairs() |> gather_emmeans_draws() |> mutate(group = "AI")
+draws_bias_di <- emmeans(fit_di, ~ dist | condition * age.group, dpar = "bias") |>
+  regrid("response") |> pairs() |> gather_emmeans_draws() |> mutate(group = "DI")
+draws_bias_both <- bind_rows(draws_bias_ai, draws_bias_di) |>
+  mutate(group = factor(group, levels = c("AI", "DI")))
+```
+
+```{r}
+#| label: fig-combined-mu
+#| fig-width: 11
+#| fig-height: 7
+p_mu_both <- ggplot(draws_mu_both, aes(x = .value, y = condition, fill = condition)) +
+  stat_halfeye() +
+  facet_grid(age.group ~ group) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "#898781") +
+  scale_fill_manual(values = condition_colors, guide = "none") +
+  labs(x = "Difference in drift rate (eq - uneq)", y = NULL, title = "Drift rate (mu)") +
+  theme_bw(base_size = 14)
+
+p_mu_both
+```
+
+```{r}
+#| label: fig-combined-ndt
+#| fig-width: 11
+#| fig-height: 7
+p_ndt_both <- ggplot(draws_ndt_both, aes(x = .value, y = condition, fill = condition)) +
+  stat_halfeye() +
+  facet_grid(age.group ~ group) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "#898781") +
+  scale_fill_manual(values = condition_colors, guide = "none") +
+  labs(x = "Difference in ndt, seconds (eq - uneq)", y = NULL, title = "Non-decision time (ndt)") +
+  theme_bw(base_size = 14)
+
+p_ndt_both
+```
+
+```{r}
+#| label: fig-combined-bias
+#| fig-width: 11
+#| fig-height: 7
+p_bias_both <- ggplot(draws_bias_both, aes(x = .value, y = condition, fill = condition)) +
+  stat_halfeye() +
+  facet_grid(age.group ~ group) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "#898781") +
+  scale_fill_manual(values = condition_colors, guide = "none") +
+  labs(x = "Difference in bias, probability scale (eq - uneq)", y = NULL, title = "Starting point (bias)") +
+  theme_bw(base_size = 14)
+
+p_bias_both
+```
+
+```{r}
+#| label: fig-combined-stacked
+#| fig-width: 11
+#| fig-height: 20
+(p_mu_both / p_ndt_both / p_bias_both) +
+  plot_annotation(
+    title = "Equal vs. unequal contrasts by parameter, group, condition, and age",
+    subtitle = "Posterior distributions of the eq − uneq difference; dashed line marks zero",
+    theme = theme(
+      plot.title = element_text(size = 16, face = "bold"),
+      plot.subtitle = element_text(size = 12, color = "#52514e")
+    )
+  )
+```
+
 # Cross-Group Comparison
 
 Put side by side, the two groups tell a story about *when* fairness starts to matter to children — and it turns out the answer depends entirely on whose interest is at stake.
