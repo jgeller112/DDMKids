@@ -44,7 +44,7 @@ We modeled response time and choice jointly with a hierarchical Bayesian drift d
 
 ## Fixed and random effects
 
-`mu`, `ndt`, and `bias` were each modeled with the full `condition * dist * age.group` factorial structure, using `0 + condition:dist:age.group` (cell-means) coding, which assigns a single directly-interpretable parameter to each of the 18 condition x dist x age group cells rather than decomposing them into main effects and interactions. This coding was adopted because it is a necessary condition for assigning every cell an equal prior: under the conventional main-effects-plus-interactions expansion, a shared prior scale on every coefficient does not translate into an equal implied prior on every cell's mean, since cells differ in how many coefficients are summed to construct them. A prior-predictive check (posterior draws generated from the prior alone) confirmed that the conventional coding produces up to 2.7-fold differences in implied prior SD across cells, whereas the cell-means coding used here flattens this to within 5-11%. `bs` was estimated as a single, freely-varying parameter with no predictors, and `bias` was fixed at 0.5 (unbiased) in earlier model iterations before being given this same full factorial structure. By-subject random intercepts and slopes for `dist` were included on `mu` only (`(1 + dist | p | sn)`, correlated across the two random effects via the shared group id `p`); random effects on `ndt` and `bias` were explored during model development and abandoned after producing severe divergences — with this few trials per subject per condition/allocation cell, individual differences in non-decision time and starting point are not well identified separately from individual differences in drift rate.
+`mu`, `ndt`, `bias`, and `bs` were each modeled with the full `condition * dist * age.group` factorial structure, using `0 + condition:dist:age.group` (cell-means) coding, which assigns a single directly-interpretable parameter to each of the 18 condition x dist x age group cells rather than decomposing them into main effects and interactions. This coding was adopted because it is a necessary condition for assigning every cell an equal prior: under the conventional main-effects-plus-interactions expansion, a shared prior scale on every coefficient does not translate into an equal implied prior on every cell's mean, since cells differ in how many coefficients are summed to construct them. A prior-predictive check (posterior draws generated from the prior alone) confirmed that the conventional coding produces up to 2.7-fold differences in implied prior SD across cells, whereas the cell-means coding used here flattens this to within 5-11%. `bs` was estimated as a single, freely-varying parameter with no predictors, and `bias` was fixed at 0.5 (unbiased), in earlier model iterations before each being given this same full factorial structure. By-subject random intercepts and slopes for `dist` were included on `mu` only (`(1 + dist | p | sn)`) in earlier iterations; random effects on `ndt`, `bias`, and `bs` were explored during that development and abandoned after producing severe divergences, when `bs` was still a single global parameter — with this few trials per subject per condition/allocation cell, individual differences in non-decision time and starting point are still not well identified separately from individual differences in drift rate. `bs` and `bias` have since been revisited: now that both have the same full factorial structure as `mu` (unlike the earlier attempt, where `bias` was still fixed at 0.5 and `bs` was still a single global parameter), they also get the same `(1 + dist | p | sn)` by-subject random intercept and `dist` slope, sharing the group id `p` with `mu`'s random effects — so `brms` estimates one correlated 6-dimensional random-effects block (intercept + `dist` slope, for each of `mu`, `bs`, and `bias`) per subject, rather than three independent 2-dimensional ones. `ndt` still has no random effects; unlike `bias`, it never had the fixed-effects-structure confound (it always had the full factorial structure), so its earlier divergences are more likely a genuine identifiability limit rather than an artifact worth revisiting.
 
 ```{r}
 #| label: formula
@@ -52,7 +52,10 @@ formula_ai <- bf(
   duration | dec(dec_recode) ~ 0 + condition:dist:age.group +
     (1 + dist | p | sn),
   ndt ~ 0 + condition:dist:age.group,
-  bias ~ 0 + condition:dist:age.group
+  bias ~ 0 + condition:dist:age.group +
+    (1 + dist | p | sn),
+  bs ~ 0 + condition:dist:age.group +
+    (1 + dist | p | sn)
 )
 ```
 
@@ -63,7 +66,7 @@ formula_ai <- bf(
 | `mu` | drift rate | identity | unconstrained |
 | `ndt` | non-decision time | identity | constrained via prior bounds (below), not the link |
 | `bias` | starting point | logit | constrains estimates to (0, 1) |
-| `bs` | boundary separation | identity | single global parameter; Stan constrains it positive at the parameter-declaration level regardless of link |
+| `bs` | boundary separation | identity | now has the full `condition:dist:age.group` structure (like `ndt`/`bias`), so it's an unconstrained linear predictor at the Stan-declaration level; positivity is enforced via the prior's `lb = 0`, not the link — same mechanism as `ndt` |
 
 ```{r}
 #| label: family
@@ -78,7 +81,10 @@ bprior_ai <-
   prior(normal(0, 1), class = b) +                                      # drift rate (mu) fixed effects
   prior(normal(0.3, 0.1), class = b, dpar = ndt, lb = 0, ub = "min_Y") + # ndt fixed effects
   prior(normal(0, 1), class = b, dpar = bias) +                         # bias, logit scale: 0.5 <-> logit 0
-  prior(normal(0, 0.03), class = sd, group = sn, lb = 0)                # by-subject random effects (mu)
+  prior(normal(2, 1), class = b, dpar = bs, lb = 0) +                   # bs fixed effects; centered near the pooled single-parameter fit (~2.6)
+  prior(normal(0, 0.03), class = sd, group = sn, lb = 0) +              # by-subject random effects (mu)
+  prior(normal(0, 0.03), class = sd, dpar = bs, group = sn, lb = 0) +   # by-subject random effects (bs) -- same tight scale as mu, made explicit
+  prior(normal(0, 0.03), class = sd, dpar = bias, group = sn, lb = 0)  # by-subject random effects (bias, logit scale) -- same tight scale again
 ```
 
 ```{r}
@@ -90,7 +96,33 @@ bprior_ai |>
   knitr::kable(caption = "Priors specified for the AI-group model.")
 ```
 
-`bs` has no prior line above — it is not given a predictor formula (see Fixed and random effects), so it falls under `class = Intercept, dpar = bs` in `brms`'s internal matching and rides on `brms`'s default prior rather than one we specified. Worth deciding deliberately whether that's acceptable for publication or whether `bs` should get an explicit prior too.
+`bs` now gets its own explicit prior (`normal(2, 1)`, `lb = 0`) rather than riding on `brms`'s default — necessary once it has a `0 + ...` predictor formula, since that coding drops the `Intercept`-level positivity constraint `brms` applies to a parameter-less `bs`, leaving `class = b, dpar = bs` with an unbounded flat default unless one is specified.
+
+`bs`'s and `bias`'s random-effect SD priors are each listed as a separate line above (`dpar = bs`, `dpar = bias`) even though, mechanically, the `mu` line's `class = sd, group = sn` prior (no `dpar`) would already broadcast across the whole correlated 6-element `sd_1` vector `mu`, `bs`, and `bias`'s random effects now share — confirmed by inspecting the generated Stan code, where a single `normal_lpdf(sd_1 | 0, 0.03)` call covers all 6 elements. The explicit `dpar` lines are redundant with that default in the current model, but are kept so the choice to reuse `mu`'s tight scale for both is visible and deliberately reviewable here, rather than an accident of how `brms` matches priors — `mu`, `bs`, and `bias` each live on a different natural scale (roughly -1 to -3, roughly 2-4, and the logit scale respectively), and a prior scale calibrated for one doesn't necessarily suit the others; `0.03` was retained across all three only because it's the same conservative choice that avoided the severe divergences random effects previously produced here.
+
+`bias`'s random effects are a re-attempt of something else explicitly flagged as risky earlier in this document: random effects on `bias` previously produced severe divergences, back when `bias` was fixed at 0.5 rather than having the full factorial fixed-effects structure it has now. Given the Fixed and random effects section's separate note that `bias`'s earlier failure was attributed partly to a genuine identifiability limit (not just the missing fixed-effects structure that turned out to explain `bs`'s earlier failure), this is less certain to succeed than `bs`'s random effects did — check the Convergence section below carefully, and don't trust Results that depend on this fit if it reproduces that failure mode.
+
+### Are these priors weakly identified?
+
+Worth being explicit about, since it bears directly on how much to trust the random-effects results below: "0 divergences and clean Rhat" does not by itself mean the data cleanly identified every parameter these priors cover — some of that cleanliness is the tight priors doing regularizing work rather than the likelihood pinning parameters down. Breaking it down by prior class, using the final fit's posterior (4 chains x 10,000 iterations, 3,800 post-warmup draws; 0 divergences, max Rhat 1.003, min Bulk ESS 3,202, min Tail ESS 2,673 — see Convergence check below):
+
+- **Fixed effects (`class = b`: the `mu`/`ndt`/`bias`/`bs` cell means).** Not weakly identified. These priors (`normal(0, 1)` for `mu`/`bias`, `normal(2, 1)` for `bs`) are genuinely weakly informative, but the posteriors come back far narrower than the prior — e.g. `bs`'s cell-level estimates run roughly 2.4-2.9 with SDs around 0.05-0.1, against a prior SD of 1. The likelihood is doing essentially all the work here.
+- **Random-effect SD priors (`normal(0, 0.03)`, half-normal via `lb = 0`).** Mixed, and less straightforward. These are *not* weakly informative by design — they're deliberately tight, chosen specifically because looser priors caused the divergences noted above. Whether the resulting variance components end up weakly identified varies by component: `sd(bs_Intercept)` = 0.089 [0.018, 0.148] and `sd(distuneq)` (`mu`'s own slope RE) = 0.149 [0.064, 0.220] both sit well clear of zero and several times the prior's characteristic scale — the data pushing back against a tight prior, a real identification signal. But `sd(bs_distuneq)` = 0.031 [0.001, 0.084], `sd(bias_distuneq)` = 0.033 [0.001, 0.089], and `sd(bias_Intercept)` = 0.053 [0.003, 0.116] all sit close to the prior's own scale, with lower credible bounds landing near zero — these read as weakly identified, the posterior mostly reflecting where the prior placed it rather than what the data independently determined.
+- **Correlations (`class = cor`, `lkj(1)`).** Clearly weakly identified. Every cross-parameter correlation (`mu`-`bias`, `mu`-`bs`, `bias`-`bs`) came back with a wide, roughly symmetric-around-zero interval (e.g. `cor(Intercept, bias_Intercept)` = 0.29, 95% CI [-0.47, 0.84]) — barely moved from what the flat `lkj(1)` prior alone would already imply. This few trials per subject just isn't enough to pin down how an individual's drift-rate, boundary-separation, and starting-point random effects covary.
+
+Practical upshot: treat the fixed-effects results below as data-driven. Treat the random-effect SDs as partially data-driven (real for `mu`'s own random effects and for `bs`'s intercept; prior-dominated for both `dist` slopes on `bs`/`bias` and for `bias`'s intercept) and the random-effect correlations as essentially prior-dominated — "the model didn't rule this out," not "the data shows this."
+
+**How this compares to the field-standard tool.** [HDDM](https://hddm.readthedocs.io/) (Wiecki, Sofer, & Frank, 2013), the most widely used hierarchical Bayesian DDM package, ships informative priors by default for exactly the reason given above — few trials per subject — but its defaults for between-subject variability are dramatically wider than the `0.03` used throughout this model: `HalfNormal(2)` for drift rate, `HalfNormal(0.1)` for boundary separation, `HalfNormal(1)` for non-decision time, and `HalfNormal(0.05)` for bias (the tightest of the four, and still ~67% wider than our `0.03`). Put concretely, `HDDM`'s default prior alone would place substantial probability on a between-subject boundary-separation SD more than 3x wider than what `sd(bs_Intercept)`'s posterior settled on here, and a drift-rate SD prior nearly 70x wider than `sd(Intercept)`'s posterior. `0.03` is not a standard default pulled from the literature; it is a project-specific choice, justified only by this project's own documented divergence history with looser priors and its unusually sparse per-subject-per-cell trial counts (an 18-cell factorial crossed with by-subject random effects, which is a much sparser design than most published hierarchical-DDM applications informing `HDDM`'s calibration). Worth stating explicitly in any write-up rather than leaving a reader to assume `0.03` reflects standard practice.
+
+### Justification for the random-effect prior scale
+
+Anticipating the reviewer question "why `0.03`, and why not just use standard priors" — four independent pieces of evidence, together rather than any one alone:
+
+1. **The data are genuinely sparse at the level these SDs describe.** Each of the 134 subjects in this group contributes only 4-12 trials in total (median 10) to the entire model, split across just the two `dist` levels within that subject's single assigned `condition x age.group` cell — a median of 5 trials per subject per `dist` level (range 2-6). The by-subject random intercept and `dist` slope are being asked to characterize individual deviation from a handful of trials each; a weakly informative or default prior at this level (as in `HDDM`'s own defaults, calibrated against denser typical designs) is not automatically appropriate for a design this sparse, and the project's own history bears that out directly (next point).
+2. **Looser priors have already been tried on this data and failed.** Random effects on `bs` and `bias` originally produced severe divergences under this project's earlier, less-constrained specifications (see Fixed and random effects above) — this is not a hypothetical concern being pre-empted, it is a documented failure mode of this specific dataset and design.
+3. **A direct head-to-head test against the literature-standard alternative confirms the failure mode rather than merely asserting it.** We refit this exact model substituting `HDDM`'s own default between-subject SD priors (`HalfNormal(2)`/`0.1`/`0.05` for `mu`/`bs`/`bias` respectively) for our `0.03`. The result was not a clean win for the wider prior: Stan's NUTS sampler reported zero divergent transitions, but every random-effect SD inflated 2-10x relative to the `0.03`-prior fit (e.g. `sd(Intercept)` 0.09 -> 0.64, `sd(distuneq)` 0.15 -> 1.43, `sd(bs_Intercept)` 0.09 -> 0.51), and three cross-parameter correlations flipped sign and became nominally "credible" that were not previously (e.g. `cor(mu Intercept, bs Intercept)`: 0.16 [-0.53, 0.74] -> -0.34 [-0.57, -0.08]). With the same sparse per-subject data, the wider prior did not supply new information to justify these much larger, more confident estimates — it supplied more room for the sampler to settle on an implausible configuration that Stan's step-size-based divergence check does not catch. This is direct evidence that adopting the field-standard prior here would trade a visible failure mode (divergences) for an invisible one (confidently wrong variance/correlation estimates), not evidence that `0.03` is merely a stylistic preference.
+4. **The tight priors are reported honestly, not used to manufacture unwarranted precision.** The "Are these priors weakly identified?" analysis above already concedes that several random-effect SDs and every cross-parameter correlation are prior-dominated under `0.03` — those specific numbers are not interpreted as findings anywhere in this document. The prior is doing acknowledged regularizing work, not hidden inferential work.
+5. **The substantive conclusions do not hinge on this choice.** Comparing this random-effects model against the immediately prior fixed-effects-only model (`ai_ddm_3way_bs`, no random effects on `bs`/`bias`) across all 9 `condition x age.group` cells: `mu`, `bias`, and `bs` show **zero** credibility flips — every cell that was credible stays credible, every cell that wasn't stays that way, with point estimates shifting only a few percent. `ndt` (already the weakest, most inconsistent parameter in this document) flipped in 2 of 9 cells, but the total count of credible `ndt` cells was unchanged (3 of 9) — cells near the credibility threshold changed sides, nothing systematic reversed. Whether or not `bs`/`bias` get random effects, and regardless of the exact SD prior scale within a range that actually converges, the reported results are the same. The random-effects structure is a defensible refinement to how uncertainty propagates through the model, not a lever that determines which findings get reported as credible.
 
 Custom starting values, since default inits tend to land somewhere the wiener likelihood can't evaluate.
 
@@ -104,7 +136,7 @@ tmp_dat_ai <- make_standata(formula_ai,
 initfun_ai <- function() {
   list(
     b = rnorm(tmp_dat_ai$K, 0, 0.2),
-    b_bs = .5,
+    b_bs = rnorm(tmp_dat_ai$K_bs, 2, 0.3),
     b_ndt = runif(tmp_dat_ai$K_ndt, 0.001, 0.05),
     b_bias = rnorm(tmp_dat_ai$K_bias, 0, 0.1),
     sd_1 = runif(tmp_dat_ai$M_1, 0.05, 0.1),
@@ -129,11 +161,11 @@ max_treedepth_val <- 15
 n_postwarmup_draws <- (n_iter - n_warmup) / n_thin * n_chains
 ```
 
-The model was fit with `r n_chains` MCMC chains of `r n_iter` iterations each (`r n_warmup` warmup), thinned by `r n_thin`, yielding `r n_postwarmup_draws` post-warmup draws. The target average Metropolis acceptance probability (`adapt_delta`) was set to `r adapt_delta_val` and maximum treedepth to `r max_treedepth_val`, both raised above `brms`'s defaults to accommodate the added sampling difficulty from `bias`'s full factorial structure.
+The model was fit with `r n_chains` MCMC chains of `r n_iter` iterations each (`r n_warmup` warmup), thinned by `r n_thin`, yielding `r n_postwarmup_draws` post-warmup draws. The target average Metropolis acceptance probability (`adapt_delta`) was set to `r adapt_delta_val` and maximum treedepth to `r max_treedepth_val`, both raised above `brms`'s defaults to accommodate the added sampling difficulty from `bias`'s full factorial structure and, now, `bs`'s and `bias`'s random effects.
 
 `file` points at the model already fit outside this document (same formula, same 1244-row `explicit_ai`), cached in `analysis/models/` — `brm()`'s default `file_refit = "never"` means it just loads that `.rds` and skips fitting entirely on render, rather than re-running MCMC every time. Resolved via `here()` rather than a relative path for the same reason as the data path above.
 
-This points at `ai_ddm_3way_bias1_diff`, not `ai_ddm_3way_bias1` — the latter is the earlier fit under the unequal-implied-prior coding described above, kept on disk for reference/comparison rather than overwritten. `ai_ddm_3way_bias1_diff` is the same model refit under the corrected `0 + condition:dist:age.group` coding; it converges just as cleanly (0 divergences) and is what all Results below now come from.
+This points at `ai_ddm_3way_bs_bias_re`, not `ai_ddm_3way_bs_re` — the latter is the prior fit, kept on disk for reference/comparison, in which only `bs` had by-subject random effects. `ai_ddm_3way_bs_bias_re` adds the same `(1 + dist | p | sn)` random effects to `bias` too, joining the correlated random-effects block that already spanned `mu` and `bs` (see Fixed and random effects). As with `bs`'s random effects, this is a re-attempt of something explicitly flagged as risky earlier in this document — check the Convergence section below carefully before trusting any Results that depend on this fit; if it reproduces the earlier severe-divergence failure mode, the right fallback is reverting to `ai_ddm_3way_bs_re` (random effects on `bs` only, not `bias`), not pushing through with a poorly-converged fit.
 
 ```{r}
 #| label: fit
@@ -144,7 +176,7 @@ fit_ai <- brm(formula_ai,
   chains = n_chains, cores = n_chains,
   iter = n_iter, warmup = n_warmup, sample_prior = TRUE,
   save_pars = save_pars(all = TRUE), thin = n_thin,
-  file = here("analysis", "models", "ai_ddm_3way_bias1_diff"),
+  file = here("analysis", "models", "ai_ddm_3way_bs_bias_re"),
   control = list(adapt_delta = adapt_delta_val, max_treedepth = max_treedepth_val),
   backend = "cmdstanr", threads = threading(2)
 )
@@ -191,8 +223,9 @@ rope_scale <- function(fit, dpar) {
 rope_mu <- rope_scale(fit_ai, "mu")
 rope_ndt <- rope_scale(fit_ai, "ndt")
 rope_bias <- rope_scale(fit_ai, "bias")
+rope_bs <- rope_scale(fit_ai, "bs")
 
-c(mu = rope_mu, ndt = rope_ndt, bias = rope_bias)
+c(mu = rope_mu, ndt = rope_ndt, bias = rope_bias, bs = rope_bs)
 ```
 
 `estimate_contrasts()` doesn't guarantee which level lands in `Level1` vs `Level2` — confirmed (see `ddm-di.qmd`) that this flips between datasets for reasons unrelated to the actual estimate. Normalize to `eq - uneq` explicitly rather than relying on it happening to come out that way.
@@ -245,10 +278,66 @@ bias_by_condition <- estimate_means(
   fit_ai, by = "condition", predict = "bias", backend = "emmeans"
 )
 
+# same, on boundary separation (bs) -- meaningful now that bs has the full
+# condition*dist*age.group structure rather than being a single global parameter
+contrasts_bs <- estimate_contrasts(
+  fit_ai, contrast = "dist", by = c("condition", "age.group"),
+  predict = "bs", backend = "emmeans", rope_range = c(-rope_bs, rope_bs)
+) |> normalize_eq_minus_uneq()
+
+# marginal bs by condition, on the natural (seconds-of-evidence-units) scale
+bs_by_condition <- estimate_means(
+  fit_ai, by = "condition", predict = "bs", backend = "emmeans"
+)
+
 contrasts_mu
 contrasts_ndt
 contrasts_bias
 bias_by_condition
+contrasts_bs
+bs_by_condition
+```
+
+## Main effects
+
+Alongside the `dist` contrast within each `condition x age.group` cell (above), each parameter also gets its three simple main effects — age (marginal over condition and dist), condition (marginal over age and dist), and dist (marginal over condition and age) — computed once here and reported under each parameter's Results subsection below. These are genuine marginal quantities (averaged over the other two factors), not a substitute for the cell-level contrasts, which remain the primary results.
+
+```{r}
+#| label: main-effects
+main_effect_means <- function(dpar, by) {
+  estimate_means(fit_ai, by = by, predict = dpar, backend = "emmeans")
+}
+main_effect_contrasts <- function(dpar, contrast) {
+  estimate_contrasts(fit_ai, contrast = contrast, predict = dpar, backend = "emmeans")
+}
+
+mu_by_age    <- main_effect_means("mu", "age.group")
+mu_by_cond   <- main_effect_means("mu", "condition")
+mu_by_dist   <- main_effect_means("mu", "dist")
+contrasts_mu_age  <- main_effect_contrasts("mu", "age.group")
+contrasts_mu_cond <- main_effect_contrasts("mu", "condition")
+contrasts_mu_dist <- main_effect_contrasts("mu", "dist") |> normalize_eq_minus_uneq()
+
+ndt_by_age    <- main_effect_means("ndt", "age.group")
+ndt_by_cond   <- main_effect_means("ndt", "condition")
+ndt_by_dist   <- main_effect_means("ndt", "dist")
+contrasts_ndt_age  <- main_effect_contrasts("ndt", "age.group")
+contrasts_ndt_cond <- main_effect_contrasts("ndt", "condition")
+contrasts_ndt_dist <- main_effect_contrasts("ndt", "dist") |> normalize_eq_minus_uneq()
+
+bias_by_age  <- main_effect_means("bias", "age.group")
+# bias_by_condition already computed above
+bias_by_dist <- main_effect_means("bias", "dist")
+contrasts_bias_age  <- main_effect_contrasts("bias", "age.group")
+contrasts_bias_cond <- main_effect_contrasts("bias", "condition")
+contrasts_bias_dist <- main_effect_contrasts("bias", "dist") |> normalize_eq_minus_uneq()
+
+bs_by_age  <- main_effect_means("bs", "age.group")
+# bs_by_condition already computed above
+bs_by_dist <- main_effect_means("bs", "dist")
+contrasts_bs_age  <- main_effect_contrasts("bs", "age.group")
+contrasts_bs_cond <- main_effect_contrasts("bs", "condition")
+contrasts_bs_dist <- main_effect_contrasts("bs", "dist") |> normalize_eq_minus_uneq()
 ```
 
 Check these column names before trusting the formatting helpers below — `estimate_contrasts()`/`estimate_means()` output can shift slightly across `modelbased` versions, and the helpers assume the standard `Difference`/`Mean`, `CI_low`, `CI_high`, `pd` names.
@@ -257,6 +346,7 @@ Check these column names before trusting the formatting helpers below — `estim
 #| label: check-columns
 names(contrasts_mu)
 names(bias_by_condition)
+names(bs_by_condition)
 ```
 
 ```{r}
@@ -321,19 +411,34 @@ fmt_rope <- function(df, ...) {
   row <- filter_row(df, ...)
   paste0(insight::format_value(row$ROPE_Percentage * 100, digits = 1), "%")
 }
+
+# Compact tables for the main-effects subsections below -- same credibility
+# criterion as credible_label() above (95% CrI excludes zero AND pd > 97.5%),
+# rendered as a Yes/No column instead of one sentence per row.
+kable_means <- function(df, digits = 3) knitr::kable(df, digits = digits)
+
+kable_contrasts <- function(df, digits = 3, pd_threshold = 0.975) {
+  df$Credible <- ifelse((df$CI_low > 0 | df$CI_high < 0) & df$pd > pd_threshold, "Yes", "No")
+  knitr::kable(df[, c("Level1", "Level2", "Difference", "CI_low", "CI_high", "pd", "Credible")], digits = digits)
+}
+
+# How many of the 9 condition x age.group cells clear the credibility bar
+# (95% CrI excludes zero AND pd > 97.5% -- same joint criterion as
+# credible_label() above, not a ROPE-based count). Defined here rather than
+# down in the Summary section since the per-parameter Results paragraphs
+# above now also quote this count.
+count_credible <- function(df, pd_threshold = 0.975) {
+  sum((df$CI_low > 0 | df$CI_high < 0) & df$pd > pd_threshold)
+}
 ```
 
 # Results
 
 ### Drift Rate
 
-For 4–5-year-olds, the equal–unequal difference in drift rate was `r credible_label(contrasts_mu, condition = "autonomous", age.group = "4&5")` in the autonomous condition (`r fmt_contrast(contrasts_mu, condition = "autonomous", age.group = "4&5")`), `r credible_label(contrasts_mu, condition = "baseline", age.group = "4&5")` in the baseline condition (`r fmt_contrast(contrasts_mu, condition = "baseline", age.group = "4&5")`), and `r credible_label(contrasts_mu, condition = "norm", age.group = "4&5")` in the norm condition too (`r fmt_contrast(contrasts_mu, condition = "norm", age.group = "4&5")`) — no condition shows a reliable distinction yet at this age.
+At 4–5 years, the autonomous (`r fmt_contrast(contrasts_mu, condition = "autonomous", age.group = "4&5")`, `r credible_label(contrasts_mu, condition = "autonomous", age.group = "4&5")`) and baseline (`r fmt_contrast(contrasts_mu, condition = "baseline", age.group = "4&5")`, `r credible_label(contrasts_mu, condition = "baseline", age.group = "4&5")`) conditions show little evidence that children differentiate between equal and unequal outcomes, but the norm condition already does (`r fmt_contrast(contrasts_mu, condition = "norm", age.group = "4&5")`). This pattern persists at 6–7 years: norm remains credible (`r fmt_contrast(contrasts_mu, condition = "norm", age.group = "6&7")`), while autonomous (`r fmt_contrast(contrasts_mu, condition = "autonomous", age.group = "6&7")`) and baseline (`r fmt_contrast(contrasts_mu, condition = "baseline", age.group = "6&7")`) remain non-credible. By 8–9 years, credible distinctions are evident in all three conditions: autonomous, `r fmt_contrast(contrasts_mu, condition = "autonomous", age.group = "8&9")`; baseline, `r fmt_contrast(contrasts_mu, condition = "baseline", age.group = "8&9")`; and norm, `r fmt_contrast(contrasts_mu, condition = "norm", age.group = "8&9")`. The emergence of credible effects in the autonomous and baseline conditions at 8–9 years aligns with developmental work suggesting that advantageous inequity aversion typically emerges around this age (Blake & McAuliffe, 2011). Norm's credibility from the youngest age tested onward suggests that explicit fairness framing does not merely pull that sensitivity forward to an intermediate age, but makes it detectable years earlier than it otherwise appears.
 
-By 6–7 years, autonomous (`r fmt_contrast(contrasts_mu, condition = "autonomous", age.group = "6&7")`) and baseline (`r fmt_contrast(contrasts_mu, condition = "baseline", age.group = "6&7")`) remained `r credible_label(contrasts_mu, condition = "autonomous", age.group = "6&7")`, while norm became the first condition to reach credibility (`r fmt_contrast(contrasts_mu, condition = "norm", age.group = "6&7")`, `r credible_label(contrasts_mu, condition = "norm", age.group = "6&7")`).
-
-By 8–9 years, the difference was `r credible_label(contrasts_mu, condition = "autonomous", age.group = "8&9")` across all three conditions: autonomous (`r fmt_contrast(contrasts_mu, condition = "autonomous", age.group = "8&9")`), baseline (`r fmt_contrast(contrasts_mu, condition = "baseline", age.group = "8&9")`), and norm (`r fmt_contrast(contrasts_mu, condition = "norm", age.group = "8&9")`).
-
-Plotted together with `ndt` and `bias` at the end of the Results section (one combined figure, `p_mu`/`p_ndt`/`p_bias` stacked via `patchwork`) rather than as three separate figures.
+Plotted together with `ndt`, `bias`, and `bs` at the end of the Results section (one combined figure, `p_mu`/`p_ndt`/`p_bias`/`p_bs` stacked via `patchwork`) rather than as four separate figures.
 
 ```{r}
 #| label: fig-mu
@@ -351,13 +456,40 @@ p_mu <- ggplot(draws_mu, aes(x = .value, y = condition, fill = condition)) +
   theme_bw(base_size = 14)
 ```
 
+#### Main Effects
+
+Simple main effects of `mu` — age (marginal over condition and dist), condition (marginal over age and dist), and dist (marginal over condition and age) — alongside the cell-level `dist` contrasts above.
+
+**Age.**
+
+```{r}
+kable_means(mu_by_age)
+kable_contrasts(contrasts_mu_age)
+```
+
+Drift rate strengthens (grows more negative) credibly from 4–5y to both 6–7y and 8–9y, but the 6–7y-to-8–9y step itself is `r credible_label(contrasts_mu_age, Level1 = "6&7", Level2 = "8&9")` — most of the age-related change in overall drift rate is already in place by 6–7y.
+
+**Condition.**
+
+```{r}
+kable_means(mu_by_cond)
+kable_contrasts(contrasts_mu_cond)
+```
+
+Only the autonomous-vs-norm comparison is credible (`r fmt_contrast(contrasts_mu_cond, Level1 = "autonomous", Level2 = "norm")`); autonomous-vs-baseline and baseline-vs-norm are not. This marginal condition effect is a much weaker signal than the condition x dist x age structure driving the cell-level results above.
+
+**Dist.**
+
+```{r}
+kable_means(mu_by_dist)
+kable_contrasts(contrasts_mu_dist)
+```
+
+Averaged across every condition and age, drift rate is credibly more negative on equal-split trials than unequal-split trials (`r fmt_contrast(contrasts_mu_dist)`) — expected given how strongly `dist` interacts with condition and age above; this marginal number isn't a story on its own.
+
 ### Non-Decision Time
 
-For 4–5-year-olds: autonomous (`r fmt_contrast(contrasts_ndt, condition = "autonomous", age.group = "4&5")`), baseline (`r fmt_contrast(contrasts_ndt, condition = "baseline", age.group = "4&5")`), norm (`r fmt_contrast(contrasts_ndt, condition = "norm", age.group = "4&5")`).
-
-For 6–7-year-olds: autonomous (`r fmt_contrast(contrasts_ndt, condition = "autonomous", age.group = "6&7")`), baseline (`r fmt_contrast(contrasts_ndt, condition = "baseline", age.group = "6&7")`), norm (`r fmt_contrast(contrasts_ndt, condition = "norm", age.group = "6&7")`).
-
-For 8–9-year-olds: autonomous (`r fmt_contrast(contrasts_ndt, condition = "autonomous", age.group = "8&9")`), baseline (`r fmt_contrast(contrasts_ndt, condition = "baseline", age.group = "8&9")`), norm (`r fmt_contrast(contrasts_ndt, condition = "norm", age.group = "8&9")`).
+In contrast to drift rate, non-decision time shows little evidence of a systematic equal-vs.-unequal distinction. Credible effects emerge in only `r count_credible(contrasts_ndt)` of the 9 condition-by-age cells, and these effects differ in direction and do not form a consistent developmental or condition-specific pattern. Thus, there is little indication that the fairness manipulation operates through changes in non-decision processes.
 
 ```{r}
 #| label: fig-ndt
@@ -375,15 +507,40 @@ p_ndt <- ggplot(draws_ndt, aes(x = .value, y = condition, fill = condition)) +
   theme_bw(base_size = 14)
 ```
 
+#### Main Effects
+
+**Age.**
+
+```{r}
+kable_means(ndt_by_age)
+kable_contrasts(contrasts_ndt_age)
+```
+
+No pairwise age difference in `ndt` is credible — consistent with the cell-level result above that `ndt` carries no coherent age pattern.
+
+**Condition.**
+
+```{r}
+kable_means(ndt_by_cond)
+kable_contrasts(contrasts_ndt_cond)
+```
+
+Autonomous-vs-norm is the one credible pairwise condition difference (`r fmt_contrast(contrasts_ndt_cond, Level1 = "autonomous", Level2 = "norm")`); autonomous-vs-baseline and baseline-vs-norm are not.
+
+**Dist.**
+
+```{r}
+kable_means(ndt_by_dist)
+kable_contrasts(contrasts_ndt_dist)
+```
+
+The marginal eq-vs-uneq difference in `ndt` is `r credible_label(contrasts_ndt_dist)` (`r fmt_contrast(contrasts_ndt_dist)`) — the CI just touches zero. Combined with the age and condition results above, `ndt`'s main effects are as weak and inconsistent as its cell-level `dist` contrasts.
+
 ### Starting Point (Bias)
 
 Bias got the same full `condition * dist * age.group` structure as `mu`/`ndt`, so it supports the same `eq - uneq` contrast — recall `dec_recode = 1` is the reject boundary, so a positive `eq - uneq` difference means the starting point for equal trials sits closer to reject *relative to* unequal trials (and vice versa for negative). One caveat worth keeping in mind reading these: unlike `mu`/`ndt`, which reflect the trial actually being processed, `bias` is supposed to represent a *pre-trial* predisposition — children don't know whether a given trial is equal or unequal until it starts, so a credible `dist` effect on bias is more likely picking up some residual asymmetry the model is using bias's flexibility to absorb, rather than a literal "predisposition toward this specific upcoming trial type."
 
-For 4–5-year-olds, the equal–unequal difference in bias was `r credible_label(contrasts_bias, condition = "autonomous", age.group = "4&5")` in the autonomous condition (`r fmt_contrast(contrasts_bias, condition = "autonomous", age.group = "4&5")`), `r credible_label(contrasts_bias, condition = "baseline", age.group = "4&5")` in baseline (`r fmt_contrast(contrasts_bias, condition = "baseline", age.group = "4&5")`), and `r credible_label(contrasts_bias, condition = "norm", age.group = "4&5")` in norm (`r fmt_contrast(contrasts_bias, condition = "norm", age.group = "4&5")`).
-
-By 6–7 years: autonomous (`r fmt_contrast(contrasts_bias, condition = "autonomous", age.group = "6&7")`), baseline (`r fmt_contrast(contrasts_bias, condition = "baseline", age.group = "6&7")`), norm (`r fmt_contrast(contrasts_bias, condition = "norm", age.group = "6&7")`).
-
-By 8–9 years: autonomous (`r fmt_contrast(contrasts_bias, condition = "autonomous", age.group = "8&9")`), baseline (`r fmt_contrast(contrasts_bias, condition = "baseline", age.group = "8&9")`), norm (`r fmt_contrast(contrasts_bias, condition = "norm", age.group = "8&9")`).
+Starting-point estimates are highly similar across conditions (autonomous = `r fmt_mean(bias_by_condition, condition = "autonomous")`; baseline = `r fmt_mean(bias_by_condition, condition = "baseline")`; norm = `r fmt_mean(bias_by_condition, condition = "norm")`), with no credible differences between conditions. Equal-vs.-unequal contrasts in starting-point bias are likewise largely absent, with only `r count_credible(contrasts_bias)` of the 9 condition-by-age cells (norm at 8–9y) reaching credibility and no clear developmental or condition-specific pattern.
 
 `contrasts_bias` (via `modelbased`) is on the **response (0-1 probability) scale by default** — confirmed by comparing it directly against `emmeans(...) |> regrid("response") |> pairs()`, which matches it exactly (both give -0.0129 for autonomous\@4&5, for example), while the plain link-scale `pairs()` (no `regrid()`) gives a different, larger number (-0.052 for the same cell). So the plot below uses `regrid("response")` before `pairs()` to match the scale the prose is already quoting, rather than the logit scale.
 
@@ -405,15 +562,97 @@ p_bias <- ggplot(draws_bias, aes(x = .value, y = condition, fill = condition)) +
   theme_bw(base_size = 14)
 ```
 
+#### Main Effects
+
+Like the cell-level contrasts above, `bias_by_age`/`_cond`/`_dist` and their contrasts are on the natural (0-1 probability) response scale — `estimate_means()`/`estimate_contrasts()` return that scale by default for `bias`, same as `contrasts_bias` above.
+
+**Age.**
+
+```{r}
+kable_means(bias_by_age)
+kable_contrasts(contrasts_bias_age)
+```
+
+Only 4–5y-vs-8–9y is credible (`r fmt_contrast(contrasts_bias_age, Level1 = "4&5", Level2 = "8&9")`); the adjacent-age steps (4–5y-vs-6–7y, 6–7y-vs-8–9y) are not, so this reads as a gradual drift rather than a sharp age transition.
+
+**Condition.**
+
+```{r}
+kable_means(bias_by_condition)
+kable_contrasts(contrasts_bias_cond)
+```
+
+No pairwise condition difference is credible — consistent with the marginal-by-condition means already reported above, which sit at a small, universal lean toward the reject boundary regardless of condition.
+
+**Dist.**
+
+```{r}
+kable_means(bias_by_dist)
+kable_contrasts(contrasts_bias_dist)
+```
+
+Averaged over condition and age, the eq-vs-uneq difference in starting point is credible (`r fmt_contrast(contrasts_bias_dist)`) — the same caveat as above applies: since children can't know a trial's type in advance, this more likely reflects the model using `bias`'s flexibility to absorb residual asymmetry than a literal pre-trial predisposition.
+
+### Boundary Separation
+
+`bs` was given the same full `condition * dist * age.group` structure as `mu`, `ndt`, and `bias` (see Fixed and random effects) rather than being estimated as a single global parameter, so it now supports the same `eq - uneq` contrast. The same caveat noted for `bias` applies here: boundary separation is conventionally treated as a pre-trial response-caution setting, not something that should vary trial-by-trial within a block — children don't know whether an upcoming trial is equal or unequal before it starts, so a credible `dist` effect on `bs` more likely reflects the model using `bs`'s added flexibility to absorb some residual asymmetry between trial types, rather than children genuinely adjusting caution in advance of a trial type they can't yet see.
+
+Unlike starting point, boundary separation shows a clear secondary pattern that tracks condition and closely tracks drift rate's own timeline. Equal-vs.-unequal contrasts are credible in `r count_credible(contrasts_bs)` of the 9 condition-by-age cells, uniformly in the direction of wider boundaries on equal-split trials. This pattern is most pronounced in the norm condition, where the contrast is already credible at 4–5 years (`r fmt_contrast(contrasts_bs, condition = "norm", age.group = "4&5")`) — the same age at which drift rate's norm contrast first becomes credible, not years afterward — and remains credible through 6–7 years (`r fmt_contrast(contrasts_bs, condition = "norm", age.group = "6&7")`) and 8–9 years (`r fmt_contrast(contrasts_bs, condition = "norm", age.group = "8&9")`). The autonomous condition reaches credibility only at 8–9 years (`r fmt_contrast(contrasts_bs, condition = "autonomous", age.group = "8&9")`), matching drift rate's own autonomous timeline, and the baseline condition does not reach credibility at any age tested, even though drift rate's baseline contrast does become credible at 8–9 years — boundary separation's credible cells are essentially a subset of drift rate's, not an independent or earlier-arriving signal.
+
+```{r}
+#| label: fig-bs
+#| fig-width: 11
+#| fig-height: 5.5
+draws_bs <- pairs(emmeans(fit_ai, ~ dist | condition * age.group, dpar = "bs")) |>
+  gather_emmeans_draws()
+
+p_bs <- ggplot(draws_bs, aes(x = .value, y = condition, fill = condition)) +
+  stat_halfeye() +
+  facet_wrap(~age.group) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  scale_fill_viridis_d(guide = "none") +
+  labs(x = "Difference in bs (eq - uneq)", y = "Condition", title = "Boundary separation (bs)") +
+  theme_bw(base_size = 14)
+```
+
+#### Main Effects
+
+**Age.**
+
+```{r}
+kable_means(bs_by_age)
+kable_contrasts(contrasts_bs_age)
+```
+
+Only 6–7y-vs-8–9y is credible (`r fmt_contrast(contrasts_bs_age, Level1 = "6&7", Level2 = "8&9")`) — the oldest group runs credibly wider boundaries than the middle group, but 4–5y isn't credibly different from either neighbor, so this isn't a clean monotonic maturation-of-caution trend.
+
+**Condition.**
+
+```{r}
+kable_means(bs_by_condition)
+kable_contrasts(contrasts_bs_cond)
+```
+
+Norm runs credibly wider boundaries than both autonomous (`r fmt_contrast(contrasts_bs_cond, Level1 = "autonomous", Level2 = "norm")`) and baseline (`r fmt_contrast(contrasts_bs_cond, Level1 = "baseline", Level2 = "norm")`); autonomous-vs-baseline is `r credible_label(contrasts_bs_cond, Level1 = "autonomous", Level2 = "baseline")`. This is the clearest main effect in the whole `bs` picture and matches the norm-specific pattern already visible in the cell-level contrasts above.
+
+**Dist.**
+
+```{r}
+kable_means(bs_by_dist)
+kable_contrasts(contrasts_bs_dist)
+```
+
+Averaged over condition and age, boundary separation is credibly wider on equal-split trials than unequal-split trials (`r fmt_contrast(contrasts_bs_dist)`) — the same direction as every credible cell-level `dist` contrast above, and the second-largest marginal `dist` effect reported in this document after `mu`'s.
+
 ### Combined figure
 
-All three `eq - uneq` contrasts, stacked (each keeps its own x-axis scale — drift rate, seconds, and probability aren't comparable units, so this isn't a shared-axis figure, just a shared layout).
+All four `eq - uneq` contrasts, stacked (each keeps its own x-axis scale — drift rate, seconds, probability, and boundary-separation units aren't comparable, so this isn't a shared-axis figure, just a shared layout).
 
 ```{r}
 #| label: fig-combined
 #| fig-width: 11
-#| fig-height: 16
-p_mu / p_ndt / p_bias
+#| fig-height: 21
+p_mu / p_ndt / p_bias / p_bs
 ```
 
 For context, the marginal bias per condition (averaged over `dist`/`age.group`), on the natural (0, 1) scale: autonomous `r fmt_mean(bias_by_condition, condition = "autonomous")`, baseline `r fmt_mean(bias_by_condition, condition = "baseline")`, norm `r fmt_mean(bias_by_condition, condition = "norm")`.
@@ -433,25 +672,25 @@ ggplot(draws_bias_marginal, aes(x = .value, y = condition, fill = condition)) +
   theme_bw(base_size = 14)
 ```
 
-## Summary
+For context, the marginal boundary separation per condition (averaged over `dist`/`age.group`): autonomous `r fmt_mean(bs_by_condition, condition = "autonomous")`, baseline `r fmt_mean(bs_by_condition, condition = "baseline")`, norm `r fmt_mean(bs_by_condition, condition = "norm")` — norm sits highest of the three.
 
 ```{r}
-#| label: summary-helper
-# how many of the 9 condition x age.group cells clear the credibility bar
-# (95% CrI excludes zero AND pd > 97.5% -- same joint criterion as
-# credible_label() above, not a ROPE-based count)
-count_credible <- function(df, pd_threshold = 0.975) {
-  sum((df$CI_low > 0 | df$CI_high < 0) & df$pd > pd_threshold)
-}
+#| label: fig-bs-marginal
+#| fig-width: 8
+#| fig-height: 4.5
+draws_bs_marginal <- emmeans(fit_ai, ~condition, dpar = "bs") |>
+  gather_emmeans_draws()
+
+ggplot(draws_bs_marginal, aes(x = .value, y = condition, fill = condition)) +
+  stat_halfeye() +
+  scale_fill_viridis_d(guide = "none") +
+  labs(x = "Boundary separation (bs)", y = "Condition", title = "AI: bs by condition (marginal over dist, age.group)") +
+  theme_bw(base_size = 14)
 ```
 
-Putting `mu`, `ndt`, and `bias` together, the three parameters tell three different stories about how the fairness manipulation actually works. Credibility throughout is based on the 95% credible interval excluding zero together with `pd > 97.5%`.
+## Summary
 
-**Drift rate carries the headline effect.** No condition shows a credible equal-vs-unequal distinction at 4–5y. Norm is the first to reach credibility, at 6–7y (`r fmt_contrast(contrasts_mu, condition = "norm", age.group = "6&7")`), while autonomous and baseline remain `r credible_label(contrasts_mu, condition = "autonomous", age.group = "6&7")` at that age. By 8–9y all three conditions are credible: autonomous `r fmt_contrast(contrasts_mu, condition = "autonomous", age.group = "8&9")`, baseline `r fmt_contrast(contrasts_mu, condition = "baseline", age.group = "8&9")`, norm `r fmt_contrast(contrasts_mu, condition = "norm", age.group = "8&9")`. This age-8-9 threshold for autonomous/baseline lines up with the well-established developmental literature on advantageous inequity aversion, which typically places its emergence around 8-9 years (e.g. Blake & McAuliffe, 2011); the norm condition's earlier (6-7y) emergence is consistent with explicit fairness framing pulling that sensitivity forward relative to its unprompted developmental timeline. `mu` is the mechanism doing the actual work here — the fairness prompt changes *how strongly and how early children weigh unequal allocations while they're deciding*, not just their final choice.
+Credibility throughout is based on the 95% credible interval excluding zero together with `pd > 97.5%` (`count_credible()`, defined in the formatters chunk above, alongside the other formatting helpers the per-parameter Results sections use).
 
-**Non-decision time shows no reliable pattern.** The `dist` contrast on `ndt` clears the credibility bar in only `r count_credible(contrasts_ndt)` of 9 condition x age group cells, and the credible cells do not share a consistent sign or a coherent age or condition trend. `ndt` is therefore not a locus of the fairness manipulation's effect. This is consistent with how non-decision time is typically interpreted in drift-diffusion applications to social and value-based decisions, where it is treated as encoding and motor overhead rather than a carrier of the value-comparison process itself; the absence of a robust `ndt` effect is the expected complement to a robust `mu` effect, not a competing finding.
-
-**Bias is not where the fairness effect lives.** Marginal starting point is nearly identical across conditions (autonomous `r fmt_mean(bias_by_condition, condition = "autonomous")`, baseline `r fmt_mean(bias_by_condition, condition = "baseline")`, norm `r fmt_mean(bias_by_condition, condition = "norm")`) — all sit at a small, universal lean toward the reject boundary, with no credible difference *between* conditions. The `dist` contrast on bias only clears the credibility bar in `r count_credible(contrasts_bias)` of 9 condition x age.group cells, with no coherent age or condition trend across them — consistent with that being residual model flexibility rather than a real pre-trial predisposition (children can't know in advance whether a trial will be equal or unequal).
-
-**Net conclusion**: the fairness prompt's effect on advantageous inequity aversion is a drift-rate phenomenon. Neither `bias` nor `ndt`, despite being given the same full factorial flexibility as `mu`, absorbs a comparable share of the effect. The fairness prompt changes *how strongly and how early* children's evidence-accumulation process distinguishes fair from unfair offers, not where that process starts or how long perceptual/motor encoding takes.
+Taken together, the effect of the fairness prompt on advantageous inequity aversion is concentrated primarily in drift rate, with boundary separation serving as a secondary, norm-specific locus present on essentially the same timeline as drift rate itself rather than emerging ahead of it. Starting-point bias and non-decision time show little evidence of systematic involvement: the `dist` contrast reaches credibility in only `r count_credible(contrasts_bias)` of 9 cells for bias and `r count_credible(contrasts_ndt)` of 9 for `ndt`, in both cases with no coherent age or condition trend, compared with `r count_credible(contrasts_mu)` of 9 for drift rate and `r count_credible(contrasts_bs)` of 9 for boundary separation. The prompt therefore appears to influence how strongly and how early children accumulate evidence differently for equal versus unequal outcomes, and — specifically under explicit fairness framing — how much evidence they require before committing to a response, rather than altering their initial response bias or the time required for perceptual and motor processes.
 
