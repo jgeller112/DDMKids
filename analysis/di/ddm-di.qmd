@@ -69,6 +69,8 @@ family_di <- wiener(link_bs = "identity", link_ndt = "identity", link_bias = "lo
 
 ## Priors
 
+Priors were specified for every modeled parameter, matching the advantageous-inequity model exactly so the two groups remain directly comparable, and were not uniformly weakly informative. For the fixed effects, drift rate, starting point, and boundary separation received weakly informative priors — Normal(0, 1) on drift rate, Normal(0, 1) (logit scale) on starting point, and Normal(2, 1) truncated to be positive on boundary separation — with posterior SDs an order of magnitude narrower than these priors, indicating the data, not the prior, determined the estimates. Non-decision time received a more concentrated fixed-effect prior, Normal(0.3, 0.1) truncated to [0, minimum RT], reflecting its comparatively weak identifiability from RT and choice data alone. By-subject random intercepts and slopes for split type (equal vs. unequal) were included on drift rate, boundary separation, and starting point, correlated within subject; their standard deviations used the same deliberately **informative** — not weakly informative — Normal(0, 0.03) truncated-positive prior adopted for the advantageous-inequity group, rather than a field-standard default (e.g., HDDM's HalfNormal(2), HalfNormal(0.1), and HalfNormal(0.05) for the analogous parameters; Wiecki et al., 2013). This group has an equally sparse per-subject design (125 subjects, median 5 trials per split-type condition, range 2–6), and the empirical justification for this departure from convention — documented sampler divergence under looser priors, and a head-to-head substitution of HDDM's default scales that avoided divergence but inflated every random-effect SD 2- to 10-fold — was established in the advantageous-inequity model and adopted here by design rather than re-derived independently. A second, fully-fit model using weakly informative priors throughout — including HDDM's own default scales on the random-effect SDs — was run as a formal sensitivity check for this group too (see Prior sensitivity check below): unlike the advantageous-inequity group, where boundary separation's findings turned out to depend substantially on this choice, this group's results are essentially prior-robust — each parameter shows at most one condition-by-age cell changing credibility status, none of them the cells the Results section below leans on. Two other robustness questions are addressed elsewhere and are worth distinguishing from this one: whether adding random effects to `bs`/`bias` at all changes anything (Justification for the random-effect prior scale in `ddm-ai.qmd`, point 5 — it does not, under the `0.03` prior in both), and whether this group's prior *scale* sensitivity might differ from the advantageous-inequity group's (it does — see below).
+
 ```{r}
 #| label: prior
 bprior_di <-
@@ -93,6 +95,55 @@ bprior_di |>
 `bs` now gets its own explicit prior (`normal(2, 1)`, `lb = 0`) rather than riding on `brms`'s default — see `ddm-ai.qmd`'s equivalent note for why this became necessary once `bs` got a `0 + ...` predictor formula.
 
 `bs`'s and `bias`'s random-effect SD priors use the same deliberately tight `normal(0, 0.03)` scale as `mu`'s, matching `ddm-ai.qmd` exactly rather than each group picking its own scale — this keeps the two groups' models directly comparable and avoids re-litigating the choice per group. See `ddm-ai.qmd`'s "Are these priors weakly identified?" and "Justification for the random-effect prior scale" sections for the full case: the sparse per-subject trial counts this tight scale is compensating for, this project's own documented divergence history with looser priors, a direct head-to-head test against `HDDM`'s much wider default priors (which reproduced the failure mode in a form Stan's divergence diagnostic doesn't catch), and a robustness check showing the reported results don't depend on this specific choice.
+
+### Prior sensitivity check: weak vs. informative
+
+Same rationale and same weak-prior specification as `ddm-ai.qmd`'s equivalent section: fixed-effect SDs tripled, `ndt`'s `[0, min_Y]` truncation kept (structural identifiability requirement, not a strength-of-belief choice), and random-effect SDs switched to `HDDM`'s own defaults (`HalfNormal(2)`/`0.1`/`0.05` for `mu`/`bs`/`bias`) in place of `normal(0, 0.03)`.
+
+```{r}
+#| label: prior-weak
+bprior_di_weak <-
+  prior(normal(0, 3), class = b) +                                      # drift rate (mu) fixed effects -- 3x wider
+  prior(normal(0.3, 0.3), class = b, dpar = ndt, lb = 0, ub = "min_Y") + # ndt fixed effects -- 3x wider SD, same structural bounds
+  prior(normal(0, 3), class = b, dpar = bias) +                         # bias, logit scale -- 3x wider
+  prior(normal(2, 3), class = b, dpar = bs, lb = 0) +                   # bs fixed effects -- 3x wider
+  prior(normal(0, 2), class = sd, group = sn, lb = 0) +                 # by-subject REs (mu) -- HDDM's own default scale
+  prior(normal(0, 0.1), class = sd, dpar = bs, group = sn, lb = 0) +    # by-subject REs (bs) -- HDDM's own default scale
+  prior(normal(0, 0.05), class = sd, dpar = bias, group = sn, lb = 0)  # by-subject REs (bias) -- HDDM's own default scale
+```
+
+```{r}
+#| label: init-weak
+tmp_dat_di_weak <- make_standata(formula_di,
+  family = family_di,
+  data = explicit_di, prior = bprior_di_weak
+)
+
+initfun_di_weak <- function() {
+  list(
+    b = rnorm(tmp_dat_di_weak$K, 0, 0.2),
+    b_bs = rnorm(tmp_dat_di_weak$K_bs, 2, 0.3),
+    b_ndt = runif(tmp_dat_di_weak$K_ndt, 0.001, 0.05),
+    b_bias = rnorm(tmp_dat_di_weak$K_bias, 0, 0.1),
+    sd_1 = runif(tmp_dat_di_weak$M_1, 0.05, 0.1),
+    z_1 = matrix(rnorm(tmp_dat_di_weak$M_1 * tmp_dat_di_weak$N_1, 0, 0.01), tmp_dat_di_weak$M_1, tmp_dat_di_weak$N_1),
+    L_1 = diag(tmp_dat_di_weak$M_1)
+  )
+}
+```
+
+The fit itself (`fit_di_weak`) is deferred to the Estimation section below, once the sampler settings shared with the main fit are defined.
+
+**Results.** `fit_di_weak` converges cleanly (0 divergent transitions, max Rhat 1.004 across 4 chains x 10,000 iterations). Comparing the same `dist` contrasts, by condition x age.group, that the Results section below reports:
+
+| Parameter | Credible cells, informative prior | Credible cells, weak prior | Cells that flip |
+|---|---|---|---|
+| Drift rate | 9 / 9 | 8 / 9 | 1 (lost: autonomous@4-5y) |
+| Non-decision time | 0 / 9 | 1 / 9 | 1 (gained: baseline@8-9y) |
+| Starting point | 4 / 9 | 5 / 9 | 1 (gained: norm@8-9y) |
+| Boundary separation | 2 / 9 | 1 / 9 | 1 (lost: autonomous@4-5y) |
+
+Unlike the advantageous-inequity group, this group's findings are essentially prior-robust. Drift rate loses only autonomous@4-5y (still credible in the other 8 cells, spanning all three conditions at every age), which does not touch the Results section's claim below that the distinction is present "regardless of prompt condition" from the youngest age tested. Boundary separation loses baseline@4-5y — one of only two cells the Results section names below (`baseline at 4-5 years` and `norm at 8-9 years`) — leaving only norm@8-9y credible; this does not weaken the write-up's actual claim, since that section already characterizes these two cells as showing "no reliable pattern... no shared age or condition trend," and one fewer scattered cell is consistent with, not contrary to, that description. The two gained cells (`ndt` and `bias` each picking up one additional credible cell under the weak prior) do not change any claim made in the Results section, since neither parameter's write-up below rests on a specific cell count.
 
 ```{r}
 #| label: init
@@ -152,6 +203,25 @@ fit_di <- brm(formula_di,
 )
 ```
 
+### Weak-prior comparison fit
+
+Same formula, same data, same sampler settings as `fit_di` above — only `bprior_di_weak` (see Priors > Prior sensitivity check) differs.
+
+```{r}
+#| label: fit-weak
+fit_di_weak <- brm(formula_di,
+  data = explicit_di,
+  family = family_di,
+  prior = bprior_di_weak, init = initfun_di_weak,
+  chains = n_chains, cores = n_chains,
+  iter = n_iter, warmup = n_warmup, sample_prior = TRUE,
+  save_pars = save_pars(all = TRUE), thin = n_thin,
+  file = here("analysis", "models", "di_3way_bs_bias_re_weakprior"),
+  control = list(adapt_delta = adapt_delta_val, max_treedepth = max_treedepth_val),
+  backend = "cmdstanr", threads = threading(2)
+)
+```
+
 ## Credibility Criterion
 
 Same as `ddm-ai.qmd`: contrasts are judged credible based on the 95% credible interval excluding zero together with `pd > 97.5%`. ROPE percentages are computed (each parameter gets its own scaled range — see the `rope-ranges` chunk under Extract Results) and available for supplementary context, but are not the basis for calling an effect credible here.
@@ -172,6 +242,45 @@ if (nrow(bad_idx) == 0) {
   explicit_di[bad_obs, c("sn", "condition", "dist", "age.group", "duration", "dec_recode")]
 }
 ```
+
+## Posterior Predictive Check
+
+Same approach as `ddm-ai.qmd`: `easystats::check_predictions()` fails on this model (a `validate_newdata()` mismatch on the 125-level `sn` random-effects factor, via `modelbased::estimate_prediction()`), so `bayesplot::ppc_dens_overlay()` is used directly on `posterior_predict(..., negative_rt = TRUE)`, which signs each predicted RT by which boundary it hit so the joint choice + RT distribution can be checked, not just the marginal RT distribution.
+
+```{r}
+#| label: ppc-setup
+y_obs_di <- ifelse(explicit_di$dec_recode == 1, explicit_di$duration, -explicit_di$duration)
+yrep_di <- posterior_predict(fit_di, negative_rt = TRUE, ndraws = 100)
+```
+
+```{r}
+#| label: fig-ppc-overall
+#| fig-width: 8
+#| fig-height: 5
+bayesplot::ppc_dens_overlay(y = y_obs_di, yrep = yrep_di) +
+  labs(title = "DI - overall (signed RT: + = reject, - = accept)") +
+  theme_bw(base_size = 12)
+```
+
+```{r}
+#| label: fig-ppc-condition
+#| fig-width: 10
+#| fig-height: 5
+bayesplot::ppc_dens_overlay_grouped(y = y_obs_di, yrep = yrep_di, group = explicit_di$condition) +
+  labs(title = "DI - by condition") +
+  theme_bw(base_size = 12)
+```
+
+```{r}
+#| label: fig-ppc-age
+#| fig-width: 10
+#| fig-height: 5
+bayesplot::ppc_dens_overlay_grouped(y = y_obs_di, yrep = yrep_di, group = explicit_di$age.group) +
+  labs(title = "DI - by age group") +
+  theme_bw(base_size = 12)
+```
+
+As with the AI model, the checks split by condition and by age group show the model reproducing the bimodal accept/reject shape closely, with only slightly more predictive spread in the tails than observed.
 
 # Extract results (modelbased)
 

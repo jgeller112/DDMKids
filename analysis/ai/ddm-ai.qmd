@@ -75,6 +75,8 @@ family_ai <- wiener(link_bs = "identity", link_ndt = "identity", link_bias = "lo
 
 ## Priors
 
+Priors were specified for every modeled parameter and were not uniformly weakly informative. For the fixed effects, drift rate, starting point, and boundary separation received weakly informative priors — Normal(0, 1) on drift rate, Normal(0, 1) (logit scale) on starting point, and Normal(2, 1) truncated to be positive on boundary separation — and their posterior SDs came back an order of magnitude narrower than these priors, indicating the data, not the prior, determined the estimates. Non-decision time received a more concentrated fixed-effect prior, Normal(0.3, 0.1) truncated to [0, minimum RT], reflecting its comparatively weak identifiability from RT and choice data alone. By-subject random intercepts and slopes for split type (equal vs. unequal) were included on drift rate, boundary separation, and starting point, correlated within subject; their standard deviations used a deliberately **informative** — not weakly informative — Normal(0, 0.03) truncated-positive prior, considerably tighter than field-standard defaults (e.g., HDDM's HalfNormal(2), HalfNormal(0.1), and HalfNormal(0.05) for the analogous parameters; Wiecki et al., 2013). This departure from convention was empirically motivated: with a median of only 5 trials per subject per split-type condition (range 2–6; 134 subjects), looser random-effect priors produced severe sampler divergence in earlier, less-structured versions of this model. A second, fully-fit model using weakly informative priors throughout — including HDDM's own default scales on the random-effect SDs — was run as a formal sensitivity check (see Prior sensitivity check below), and unlike that earlier divergence history, it now converges cleanly (0 divergences, Rhat < 1.01). It is not, however, substantively equivalent: switching to the weak prior costs drift rate 2 of its 5 credible condition-by-age cells and boundary separation 3 of its 4, while starting point and non-decision time are essentially unchanged. Boundary separation's findings in particular should be read as prior-sensitive rather than as robust as drift rate's — see Prior sensitivity check for the full breakdown and Boundary Separation below for how this qualifies those results. This is a different question from the one addressed in Justification for the random-effect prior scale, point 5 below, which is easy to conflate with this one since both are called "robustness checks." That earlier check, from before `bs` and `bias` had random effects at all, compares the current model against `ai_ddm_3way_bs` — an earlier cached fit from back when `bs`/`bias` had no `(1 + dist | p | sn)` term — with the `0.03` prior held fixed in both. It found ~zero credibility reversals, but it is asking "does adding random effects to `bs`/`bias` change the results," not "does the random-effect prior's *scale* change the results." Both models in that comparison have the same tight prior; both models in *this* comparison have the same random-effects structure. They are independent questions, and only this one — prior scale — turned out to matter for boundary separation.
+
 ```{r}
 #| label: prior
 bprior_ai <-
@@ -123,6 +125,57 @@ Anticipating the reviewer question "why `0.03`, and why not just use standard pr
 3. **A direct head-to-head test against the literature-standard alternative confirms the failure mode rather than merely asserting it.** We refit this exact model substituting `HDDM`'s own default between-subject SD priors (`HalfNormal(2)`/`0.1`/`0.05` for `mu`/`bs`/`bias` respectively) for our `0.03`. The result was not a clean win for the wider prior: Stan's NUTS sampler reported zero divergent transitions, but every random-effect SD inflated 2-10x relative to the `0.03`-prior fit (e.g. `sd(Intercept)` 0.09 -> 0.64, `sd(distuneq)` 0.15 -> 1.43, `sd(bs_Intercept)` 0.09 -> 0.51), and three cross-parameter correlations flipped sign and became nominally "credible" that were not previously (e.g. `cor(mu Intercept, bs Intercept)`: 0.16 [-0.53, 0.74] -> -0.34 [-0.57, -0.08]). With the same sparse per-subject data, the wider prior did not supply new information to justify these much larger, more confident estimates — it supplied more room for the sampler to settle on an implausible configuration that Stan's step-size-based divergence check does not catch. This is direct evidence that adopting the field-standard prior here would trade a visible failure mode (divergences) for an invisible one (confidently wrong variance/correlation estimates), not evidence that `0.03` is merely a stylistic preference.
 4. **The tight priors are reported honestly, not used to manufacture unwarranted precision.** The "Are these priors weakly identified?" analysis above already concedes that several random-effect SDs and every cross-parameter correlation are prior-dominated under `0.03` — those specific numbers are not interpreted as findings anywhere in this document. The prior is doing acknowledged regularizing work, not hidden inferential work.
 5. **The substantive conclusions do not hinge on this choice.** Comparing this random-effects model against the immediately prior fixed-effects-only model (`ai_ddm_3way_bs`, no random effects on `bs`/`bias`) across all 9 `condition x age.group` cells: `mu`, `bias`, and `bs` show **zero** credibility flips — every cell that was credible stays credible, every cell that wasn't stays that way, with point estimates shifting only a few percent. `ndt` (already the weakest, most inconsistent parameter in this document) flipped in 2 of 9 cells, but the total count of credible `ndt` cells was unchanged (3 of 9) — cells near the credibility threshold changed sides, nothing systematic reversed. Whether or not `bs`/`bias` get random effects, and regardless of the exact SD prior scale within a range that actually converges, the reported results are the same. The random-effects structure is a defensible refinement to how uncertainty propagates through the model, not a lever that determines which findings get reported as credible.
+
+### Prior sensitivity check: weak vs. informative
+
+The head-to-head comparison in point 3 above (wider RE-SD priors inflating variance components 2-10x and flipping correlation signs) was run as an ad hoc diagnostic and reported only in prose. Formalized here as a real, cached second fit — same `formula_ai`, same data, only the prior changed — so it can be referenced and inspected the same way as the main model rather than taken on faith.
+
+`bprior_ai_weak` widens every prior in `bprior_ai`. The fixed-effect SDs are tripled (`1` -> `3` for `mu`/`bias`/`bs`; `0.1` -> `0.3` for `ndt`) — low-stakes changes, since the Are these priors weakly identified? section above already showed fixed-effect posteriors landing an order of magnitude narrower than even the current prior, so tripling the SD is unlikely to move anything. `ndt` keeps its `[0, min_Y]` truncation in both versions; that bound is a structural identifiability requirement documented in prior work on this family (an untruncated shift parameter has a flat likelihood direction as it approaches the fastest observed RT), not a strength-of-belief choice, so removing it isn't a fair test of "weak vs. informative" and would just break the model instead. The random-effect SDs switch from `normal(0, 0.03)` to `HDDM`'s own defaults (`HalfNormal(2)`/`0.1`/`0.05` for `mu`/`bs`/`bias`) — the literature-standard alternative already cited above, rather than an arbitrary wider number invented for this comparison.
+
+```{r}
+#| label: prior-weak
+bprior_ai_weak <-
+  prior(normal(0, 3), class = b) +                                      # drift rate (mu) fixed effects -- 3x wider
+  prior(normal(0.3, 0.3), class = b, dpar = ndt, lb = 0, ub = "min_Y") + # ndt fixed effects -- 3x wider SD, same structural bounds
+  prior(normal(0, 3), class = b, dpar = bias) +                         # bias, logit scale -- 3x wider
+  prior(normal(2, 3), class = b, dpar = bs, lb = 0) +                   # bs fixed effects -- 3x wider
+  prior(normal(0, 2), class = sd, group = sn, lb = 0) +                 # by-subject REs (mu) -- HDDM's own default scale
+  prior(normal(0, 0.1), class = sd, dpar = bs, group = sn, lb = 0) +    # by-subject REs (bs) -- HDDM's own default scale
+  prior(normal(0, 0.05), class = sd, dpar = bias, group = sn, lb = 0)  # by-subject REs (bias) -- HDDM's own default scale
+```
+
+```{r}
+#| label: init-weak
+tmp_dat_ai_weak <- make_standata(formula_ai,
+  family = family_ai,
+  data = explicit_ai, prior = bprior_ai_weak
+)
+
+initfun_ai_weak <- function() {
+  list(
+    b = rnorm(tmp_dat_ai_weak$K, 0, 0.2),
+    b_bs = rnorm(tmp_dat_ai_weak$K_bs, 2, 0.3),
+    b_ndt = runif(tmp_dat_ai_weak$K_ndt, 0.001, 0.05),
+    b_bias = rnorm(tmp_dat_ai_weak$K_bias, 0, 0.1),
+    sd_1 = runif(tmp_dat_ai_weak$M_1, 0.05, 0.1),
+    z_1 = matrix(rnorm(tmp_dat_ai_weak$M_1 * tmp_dat_ai_weak$N_1, 0, 0.01), tmp_dat_ai_weak$M_1, tmp_dat_ai_weak$N_1),
+    L_1 = diag(tmp_dat_ai_weak$M_1)
+  )
+}
+```
+
+The fit itself (`fit_ai_weak`) is deferred to the Estimation section below, once the sampler settings shared with the main fit are defined.
+
+**Results.** `fit_ai_weak` converges as cleanly as the main model (0 divergent transitions, max Rhat 1.003 across 4 chains x 10,000 iterations) — the earlier divergence history under looser priors does not reproduce once `bs` and `bias` have the full factorial fixed-effects structure. Convergence is not the same as agreement, though. Comparing the same `dist` (equal-vs-unequal) contrasts, by condition x age.group, that the Results section below reports:
+
+| Parameter | Credible cells, informative prior | Credible cells, weak prior | Cells that flip |
+|---|---|---|---|
+| Drift rate | 5 / 9 | 3 / 9 | 2 (both lost: norm@4-5y, baseline@8-9y) |
+| Non-decision time | 3 / 9 | 3 / 9 | 2 (1 gained, 1 lost — net unchanged) |
+| Starting point | 1 / 9 | 1 / 9 | 0 |
+| Boundary separation | 4 / 9 | 1 / 9 | 3 (all lost) |
+
+Drift rate and starting point are largely prior-robust: drift rate's two lost cells (norm@4-5y: -0.557 [-1.04, -0.08] -> -0.707 [-1.70, 0.29]; baseline@8-9y: -0.63 [-1.03, -0.23] -> -0.781 [-1.62, 0.05]) keep the same sign and roughly the same point estimate under the weak prior — the interval simply widens past zero, which is the expected behavior of removing a regularizing prior on sparse per-subject data, not evidence the effect is spurious. Boundary separation is not robust: norm@4-5y, norm@6-7y, and autonomous@8-9y all lose credibility, leaving only norm@8-9y — exactly the cells that carry the "norm widens boundaries specifically on equal-split trials, from the youngest age tested" claim in the Results section below. That claim should be read as resting substantially on the choice of a tight, empirically-motivated-but-nonstandard random-effect prior, not as a finding that would survive a field-standard prior specification. See Boundary Separation below for how this qualifies that section's conclusions.
 
 Custom starting values, since default inits tend to land somewhere the wiener likelihood can't evaluate.
 
@@ -182,6 +235,25 @@ fit_ai <- brm(formula_ai,
 )
 ```
 
+### Weak-prior comparison fit
+
+Same formula, same data, same sampler settings as `fit_ai` above — only `bprior_ai_weak` (see Priors > Prior sensitivity check) differs. Cached separately so both fits are inspectable side by side rather than one overwriting the other.
+
+```{r}
+#| label: fit-weak
+fit_ai_weak <- brm(formula_ai,
+  data = explicit_ai,
+  family = family_ai,
+  prior = bprior_ai_weak, init = initfun_ai_weak,
+  chains = n_chains, cores = n_chains,
+  iter = n_iter, warmup = n_warmup, sample_prior = TRUE,
+  save_pars = save_pars(all = TRUE), thin = n_thin,
+  file = here("analysis", "models", "ai_ddm_3way_bs_bias_re_weakprior"),
+  control = list(adapt_delta = adapt_delta_val, max_treedepth = max_treedepth_val),
+  backend = "cmdstanr", threads = threading(2)
+)
+```
+
 ## Credibility Criterion
 
 Contrasts are judged credible based on the 95% credible interval excluding zero together with the probability of direction (`pd > 97.5%`). Region-of-practical-equivalence (ROPE) percentages are also computed and available in the extracted results objects (each distributional parameter gets its own scaled range, since the automatic default has no supported method for a multi-parameter Wiener/DDM family — see the `rope-ranges` chunk under Extract Results), but ROPE is reported only for supplementary context here, not as the basis for calling an effect credible.
@@ -204,6 +276,47 @@ if (nrow(bad_idx) == 0) {
   explicit_ai[bad_obs, c("sn", "condition", "dist", "age.group", "duration", "dec_recode")]
 }
 ```
+
+## Posterior Predictive Check
+
+`easystats::check_predictions()` (via `performance::check_predictions.brmsfit()`) does not work on this model — it routes through `modelbased::estimate_prediction()`, which reconstructs `newdata` in a way that fails `brms::validate_newdata()`'s check against the 134-level `sn` random-effects factor, regardless of the wiener/`dec()` response structure. `bayesplot::ppc_dens_overlay()` called directly on `posterior_predict()`'s output works and is used instead.
+
+The wiener family's `posterior_predict()` returns raw (unsigned) RTs by default; `negative_rt = TRUE` signs each draw by which boundary it hit (positive = the `dec_recode = 1` boundary, negative = `dec_recode = 0`), which is what makes it possible to check the joint choice + RT distribution — not just the marginal RT distribution — against the same signed transform of the observed data.
+
+```{r}
+#| label: ppc-setup
+y_obs_ai <- ifelse(explicit_ai$dec_recode == 1, explicit_ai$duration, -explicit_ai$duration)
+yrep_ai <- posterior_predict(fit_ai, negative_rt = TRUE, ndraws = 100)
+```
+
+```{r}
+#| label: fig-ppc-overall
+#| fig-width: 8
+#| fig-height: 5
+bayesplot::ppc_dens_overlay(y = y_obs_ai, yrep = yrep_ai) +
+  labs(title = "AI - overall (signed RT: + = reject, - = accept)") +
+  theme_bw(base_size = 12)
+```
+
+```{r}
+#| label: fig-ppc-condition
+#| fig-width: 10
+#| fig-height: 5
+bayesplot::ppc_dens_overlay_grouped(y = y_obs_ai, yrep = yrep_ai, group = explicit_ai$condition) +
+  labs(title = "AI - by condition") +
+  theme_bw(base_size = 12)
+```
+
+```{r}
+#| label: fig-ppc-age
+#| fig-width: 10
+#| fig-height: 5
+bayesplot::ppc_dens_overlay_grouped(y = y_obs_ai, yrep = yrep_ai, group = explicit_ai$age.group) +
+  labs(title = "AI - by age group") +
+  theme_bw(base_size = 12)
+```
+
+Both the overall check and the checks split by condition and by age group show the model reproducing the bimodal accept/reject shape closely — peak locations and heights both track the observed data well, with the predictive draws showing only slightly more spread in the tails than observed, which is expected posterior uncertainty rather than a sign of misfit.
 
 # Extract results (modelbased)
 
@@ -597,7 +710,7 @@ Averaged over condition and age, the eq-vs-uneq difference in starting point is 
 
 `bs` was given the same full `condition * dist * age.group` structure as `mu`, `ndt`, and `bias` (see Fixed and random effects) rather than being estimated as a single global parameter, so it now supports the same `eq - uneq` contrast. The same caveat noted for `bias` applies here: boundary separation is conventionally treated as a pre-trial response-caution setting, not something that should vary trial-by-trial within a block — children don't know whether an upcoming trial is equal or unequal before it starts, so a credible `dist` effect on `bs` more likely reflects the model using `bs`'s added flexibility to absorb some residual asymmetry between trial types, rather than children genuinely adjusting caution in advance of a trial type they can't yet see.
 
-Unlike starting point, boundary separation shows a clear secondary pattern that tracks condition and closely tracks drift rate's own timeline. Equal-vs.-unequal contrasts are credible in `r count_credible(contrasts_bs)` of the 9 condition-by-age cells, uniformly in the direction of wider boundaries on equal-split trials. This pattern is most pronounced in the norm condition, where the contrast is already credible at 4–5 years (`r fmt_contrast(contrasts_bs, condition = "norm", age.group = "4&5")`) — the same age at which drift rate's norm contrast first becomes credible, not years afterward — and remains credible through 6–7 years (`r fmt_contrast(contrasts_bs, condition = "norm", age.group = "6&7")`) and 8–9 years (`r fmt_contrast(contrasts_bs, condition = "norm", age.group = "8&9")`). The autonomous condition reaches credibility only at 8–9 years (`r fmt_contrast(contrasts_bs, condition = "autonomous", age.group = "8&9")`), matching drift rate's own autonomous timeline, and the baseline condition does not reach credibility at any age tested, even though drift rate's baseline contrast does become credible at 8–9 years — boundary separation's credible cells are essentially a subset of drift rate's, not an independent or earlier-arriving signal.
+Unlike starting point, boundary separation shows a clear secondary pattern that tracks condition and closely tracks drift rate's own timeline. Equal-vs.-unequal contrasts are credible in `r count_credible(contrasts_bs)` of the 9 condition-by-age cells, uniformly in the direction of wider boundaries on equal-split trials. This pattern is most pronounced in the norm condition, where the contrast is already credible at 4–5 years (`r fmt_contrast(contrasts_bs, condition = "norm", age.group = "4&5")`) — the same age at which drift rate's norm contrast first becomes credible, not years afterward — and remains credible through 6–7 years (`r fmt_contrast(contrasts_bs, condition = "norm", age.group = "6&7")`) and 8–9 years (`r fmt_contrast(contrasts_bs, condition = "norm", age.group = "8&9")`). The autonomous condition reaches credibility only at 8–9 years (`r fmt_contrast(contrasts_bs, condition = "autonomous", age.group = "8&9")`), matching drift rate's own autonomous timeline, and the baseline condition does not reach credibility at any age tested, even though drift rate's baseline contrast does become credible at 8–9 years — boundary separation's credible cells are essentially a subset of drift rate's, not an independent or earlier-arriving signal. This pattern should be read with more caution than drift rate's: a formal prior-sensitivity check (Priors > Prior sensitivity check) found that 3 of these 4 credible cells — norm at every age and autonomous at 8–9y, leaving only norm@8-9y — lose credibility under a weakly informative random-effect prior, while drift rate's own findings are comparatively stable under the same check. This developmental pattern in `bs` is real given the priors used here, but it depends on them more than drift rate's does.
 
 ```{r}
 #| label: fig-bs
@@ -692,5 +805,5 @@ ggplot(draws_bs_marginal, aes(x = .value, y = condition, fill = condition)) +
 
 Credibility throughout is based on the 95% credible interval excluding zero together with `pd > 97.5%` (`count_credible()`, defined in the formatters chunk above, alongside the other formatting helpers the per-parameter Results sections use).
 
-Taken together, the effect of the fairness prompt on advantageous inequity aversion is concentrated primarily in drift rate, with boundary separation serving as a secondary, norm-specific locus present on essentially the same timeline as drift rate itself rather than emerging ahead of it. Starting-point bias and non-decision time show little evidence of systematic involvement: the `dist` contrast reaches credibility in only `r count_credible(contrasts_bias)` of 9 cells for bias and `r count_credible(contrasts_ndt)` of 9 for `ndt`, in both cases with no coherent age or condition trend, compared with `r count_credible(contrasts_mu)` of 9 for drift rate and `r count_credible(contrasts_bs)` of 9 for boundary separation. The prompt therefore appears to influence how strongly and how early children accumulate evidence differently for equal versus unequal outcomes, and — specifically under explicit fairness framing — how much evidence they require before committing to a response, rather than altering their initial response bias or the time required for perceptual and motor processes.
+Taken together, the effect of the fairness prompt on advantageous inequity aversion is concentrated primarily in drift rate, with boundary separation serving as a secondary, norm-specific locus present on essentially the same timeline as drift rate itself rather than emerging ahead of it — though, unlike drift rate, this secondary role depends substantially on the random-effect prior's scale (Priors > Prior sensitivity check). Starting-point bias and non-decision time show little evidence of systematic involvement: the `dist` contrast reaches credibility in only `r count_credible(contrasts_bias)` of 9 cells for bias and `r count_credible(contrasts_ndt)` of 9 for `ndt`, in both cases with no coherent age or condition trend, compared with `r count_credible(contrasts_mu)` of 9 for drift rate and `r count_credible(contrasts_bs)` of 9 for boundary separation. The prompt therefore appears to influence how strongly and how early children accumulate evidence differently for equal versus unequal outcomes, and — specifically under explicit fairness framing, and with the above caveat — how much evidence they require before committing to a response, rather than altering their initial response bias or the time required for perceptual and motor processes.
 
