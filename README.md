@@ -31,18 +31,6 @@ analysis/
     ai_ddm_3way_bias1.rds           Cached AI model fit
     di_3way_full.rds                Cached DI model fit
 
-archive/                            Orphaned files from earlier iterations, not
-                                     referenced by any current document. Nothing
-                                     deleted, just moved out of the way.
-  ddm-katie.qmd                     Earlier, superseded exploratory notebook
-                                     (model comparison across main-effects/
-                                     2-way/3-way/cogmod variants). Its cached
-                                     .rds fits are no longer present, so it
-                                     will not re-render as-is.
-  Models/                           Cached fits from that notebook's earlier
-                                     naming scheme
-  *.rds                             Other superseded cached model fits
-
 LICENSE                             MIT
 ```
 
