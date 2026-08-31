@@ -19,6 +19,8 @@ library(tidybayes)
 library(patchwork)
 library(knitr)
 library(here)
+library(flextable)
+library(officer)
 
 options(
   scipen = 999,
@@ -226,9 +228,9 @@ for (dp in c("mu", "ndt", "bias", "bs")) {
 
 **Starting point.** Starting-point estimates are also highly similar across conditions (autonomous = `r fmt_mean(bias_by_condition_ai, condition = "autonomous")`; baseline = `r fmt_mean(bias_by_condition_ai, condition = "baseline")`; norm = `r fmt_mean(bias_by_condition_ai, condition = "norm")`), with no credible differences between conditions. Equal-vs.-unequal contrasts in starting-point bias are likewise largely absent, with only `r count_credible(contrasts_bias_ai)` of the 9 condition-by-age cells reaching credibility and no clear developmental or condition-specific pattern.
 
-**Boundary separation.** Unlike starting point, boundary separation shows a clear secondary pattern that tracks condition, and closely tracks drift rate's own timeline rather than leading or lagging it. Equal-vs.-unequal contrasts are credible in `r count_credible(contrasts_bs_ai)` of the 9 condition-by-age cells, uniformly in the direction of wider boundaries on equal-split trials. This pattern is most pronounced in the norm condition, where the contrast is already credible at 4–5 years (`r fmt_contrast(contrasts_bs_ai, condition = "norm", age.group = "4&5")`) — the same age at which drift rate's norm contrast first becomes credible — and remains credible through 8–9 years (`r fmt_contrast(contrasts_bs_ai, condition = "norm", age.group = "8&9")`). The autonomous condition reaches credibility only at 8–9 years (`r fmt_contrast(contrasts_bs_ai, condition = "autonomous", age.group = "8&9")`), matching drift rate's own autonomous timeline, and the baseline condition does not reach credibility at any age tested, even though drift rate's baseline contrast does become credible at 8–9 years — boundary separation's credible cells are essentially a subset of drift rate's, not an independent or earlier-arriving signal. Consistent with this pattern, norm also shows the widest marginal boundary separation of the three conditions (autonomous = `r fmt_mean(bs_by_condition_ai, condition = "autonomous")`; baseline = `r fmt_mean(bs_by_condition_ai, condition = "baseline")`; norm = `r fmt_mean(bs_by_condition_ai, condition = "norm")`). This pattern should be read with more caution than drift rate's: a formal prior-sensitivity check (`ddm-ai.qmd`, Priors > Prior sensitivity check) found that 3 of these 4 credible cells lose credibility under a weakly informative random-effect prior, leaving only norm@8-9y, while drift rate's own findings are comparatively stable under the same check.
+**Boundary separation.** Unlike starting point, boundary separation shows a clear secondary pattern that tracks condition, and closely tracks drift rate's own timeline rather than leading or lagging it. Equal-vs.-unequal contrasts are credible in `r count_credible(contrasts_bs_ai)` of the 9 condition-by-age cells, uniformly in the direction of wider boundaries on equal-split trials. This pattern is most pronounced in the norm condition, where the contrast is already credible at 4–5 years (`r fmt_contrast(contrasts_bs_ai, condition = "norm", age.group = "4&5")`) — the same age at which drift rate's norm contrast first becomes credible — and remains credible through 8–9 years (`r fmt_contrast(contrasts_bs_ai, condition = "norm", age.group = "8&9")`). The autonomous condition reaches credibility only at 8–9 years (`r fmt_contrast(contrasts_bs_ai, condition = "autonomous", age.group = "8&9")`), matching drift rate's own autonomous timeline, and the baseline condition does not reach credibility at any age tested, even though drift rate's baseline contrast does become credible at 8–9 years — boundary separation's credible cells are essentially a subset of drift rate's, not an independent or earlier-arriving signal. Consistent with this pattern, norm also shows the widest marginal boundary separation of the three conditions (autonomous = `r fmt_mean(bs_by_condition_ai, condition = "autonomous")`; baseline = `r fmt_mean(bs_by_condition_ai, condition = "baseline")`; norm = `r fmt_mean(bs_by_condition_ai, condition = "norm")`). This pattern should be read with more caution than drift rate's: a formal prior-sensitivity check (`ddm-ai.qmd`, Priors \> Prior sensitivity check) found that 3 of these 4 credible cells lose credibility under a weakly informative random-effect prior, leaving only norm\@8-9y, while drift rate's own findings are comparatively stable under the same check.
 
-Taken together, the effect of the fairness prompt on advantageous inequity aversion is concentrated primarily in drift rate, with boundary separation serving as a secondary, norm-specific locus present on essentially the same timeline as drift rate itself rather than emerging ahead of it — though, unlike drift rate, this secondary role depends substantially on the random-effect prior's scale (`ddm-ai.qmd`, Priors > Prior sensitivity check). Starting-point bias and non-decision time show little evidence of systematic involvement. The prompt therefore appears to influence how strongly and how early children accumulate evidence differently for equal versus unequal outcomes, and — specifically under explicit fairness framing, and with the above caveat — how much evidence they require before committing to a response, rather than altering their initial response bias or the time required for perceptual and motor processes.
+Taken together, the effect of the fairness prompt on advantageous inequity aversion is concentrated primarily in drift rate, with boundary separation serving as a secondary, norm-specific locus present on essentially the same timeline as drift rate itself rather than emerging ahead of it — though, unlike drift rate, this secondary role depends substantially on the random-effect prior's scale (`ddm-ai.qmd`, Priors \> Prior sensitivity check). Starting-point bias and non-decision time show little evidence of systematic involvement. The prompt therefore appears to influence how strongly and how early children accumulate evidence differently for equal versus unequal outcomes, and — specifically under explicit fairness framing, and with the above caveat — how much evidence they require before committing to a response, rather than altering their initial response bias or the time required for perceptual and motor processes.
 
 # Disadvantageous Inequity (DI) Group
 
@@ -336,18 +338,17 @@ Taken together, disadvantageous inequity aversion is present from the youngest a
 
 Every age, condition, and dist main-effect comparison computed above (all four parameters, both groups), consolidated into one APA-style table rather than scattered across the bullets. A second table below does the same for the cell-level `dist` x `condition` x `age.group` interaction contrasts (the primary results throughout this document). Both are built programmatically from the `contrasts_*` objects already computed above, so neither can drift out of sync with the prose.
 
-**Format.** Both tables follow APA table conventions: a numbered, italicized title above the table; horizontal rules only (above the header, below the header, at the bottom) with no vertical rules; the `Parameter` column grouped with `rowspan` instead of repeating on every row; group and condition/age labels spelled out and title-cased; and a `Note.` line below explaining abbreviations. AI and DI each get a spanning three-column header (`Estimate [95% CrI]`, `pd`, `% in ROPE`) rather than six flat columns repeating "AI"/"DI" in every header.
+**Format.** Both tables follow APA table conventions: a numbered, italicized title above the table; horizontal rules only (above the header, below the header, at the bottom) with no vertical rules; the `Parameter` column grouped with `rowspan` instead of repeating on every row; group and condition/age labels spelled out and title-cased; and a `Note.` line below explaining abbreviations. AI and DI each get a spanning two-column header (`Estimate [95% CrI]`, `pd`) rather than four flat columns repeating "AI"/"DI" in every header.
 
 **Color coding.** `mu` and `bias` estimate cells are shaded by direction, since both share the same sign convention given how `dec_recode` is coded (`dec_recode = 1` = reject boundary): a **red** cell means the comparison shifts evidence/starting-point toward *reject*, a **green** cell means it shifts toward *accept*. Saturation carries credibility — vivid color means the comparison clears the 95% CrI/*pd* bar, pale color means it doesn't. `bs` and `ndt` are deliberately left uncolored: neither points toward either response boundary, so an accept/reject color scheme would misrepresent what they measure. Alternating row shading (light gray) is layered underneath for readability and doesn't override the direction color where one applies.
 
-Both tables are hand-built HTML (`<table>`/`<td>`, not `knitr::kable()`), with every style — background color, borders, alignment — set directly on the `<td>`/`<th>` itself. That combination is what survives copy-pasting the rendered table into Word: Word's HTML importer reliably keeps styling set directly on a table cell, is inconsistent about styling nested inside a cell (e.g. a `<span>`), and `kable()`'s output format isn't guaranteed to be a real `<table>` outside an actual render pipeline.
+Both tables are hand-built HTML (`<table>`/`<td>`, not `knitr::kable()`) for the rendered document, with every style — background color, borders, alignment — set directly on the `<td>`/`<th>` itself so the styling survives a plain copy-paste as well as it can. Because copy-pasting an HTML table into Word or Google Docs is still not fully reliable (rowspan/colspan handling and cell shading can drop depending on the browser and importer), the same row data is also used to build real, native tables via `flextable`/`officer`, written out to `ddm-combined-tables.docx` — opening or importing that file (Word directly, or Google Docs via Drive upload/Open) preserves merged cells, shading, and borders exactly, with no copy-paste step involved.
 
 ```{r}
 #| label: apa-table-helpers
 fmt_est <- function(x) insight::format_value(x, digits = 2)
 fmt_ci <- function(lo, hi) sprintf("[%s, %s]", insight::format_value(lo, digits = 2), insight::format_value(hi, digits = 2))
 fmt_pd_pct <- function(pd) sprintf("%s%%", insight::format_value(pd * 100, digits = 1))
-fmt_rope_pct <- function(rope) sprintf("%s%%", insight::format_value(rope * 100, digits = 1))
 is_credible <- function(lo, hi, pd) (lo > 0 | hi < 0) & pd > 0.975
 
 combine_estimate_ci <- function(est, lo, hi) sprintf("%s %s", fmt_est(est), fmt_ci(lo, hi))
@@ -418,26 +419,24 @@ apa_th <- function(text, align = "center", colspan = 1, rowspan = 1, top_rule = 
 apa_table_head <- function(lead_headers) {
   top <- paste0(
     paste0(vapply(lead_headers, function(h) apa_th(h, align = "left", rowspan = 2, top_rule = TRUE), character(1)), collapse = ""),
-    apa_th("AI", colspan = 3, top_rule = TRUE),
-    apa_th("DI", colspan = 3, top_rule = TRUE)
+    apa_th("AI", colspan = 2, top_rule = TRUE),
+    apa_th("DI", colspan = 2, top_rule = TRUE)
   )
   bottom <- paste0(
-    apa_th("Estimate [95% CrI]", bottom_rule = TRUE), apa_th("pd", bottom_rule = TRUE), apa_th("% in ROPE", bottom_rule = TRUE),
-    apa_th("Estimate [95% CrI]", bottom_rule = TRUE), apa_th("pd", bottom_rule = TRUE), apa_th("% in ROPE", bottom_rule = TRUE)
+    apa_th("Estimate [95% CrI]", bottom_rule = TRUE), apa_th("pd", bottom_rule = TRUE),
+    apa_th("Estimate [95% CrI]", bottom_rule = TRUE), apa_th("pd", bottom_rule = TRUE)
   )
   paste0("<thead>\n<tr>", top, "</tr>\n<tr>", bottom, "</tr>\n</thead>\n")
 }
 
-# One data row's 6 numeric cells (AI Estimate, AI pd, AI ROPE%, DI Estimate,
-# DI pd, DI ROPE%); the caller prepends whatever leading label cells that row needs.
+# One data row's 4 numeric cells (AI Estimate, AI pd, DI Estimate, DI pd);
+# the caller prepends whatever leading label cells that row needs.
 apa_numeric_cells <- function(r, dp, stripe, group_rule) {
   paste0(
     apa_td(combine_estimate_ci(r$Difference_ai, r$CI_low_ai, r$CI_high_ai), bg = cell_bg(r$Difference_ai, r$CI_low_ai, r$CI_high_ai, r$pd_ai, dp), stripe = stripe, group_rule = group_rule),
     apa_td(combine_pd_credible(r$pd_ai, r$CI_low_ai, r$CI_high_ai), stripe = stripe, group_rule = group_rule),
-    apa_td(fmt_rope_pct(r$ROPE_Percentage_ai), stripe = stripe, group_rule = group_rule),
     apa_td(combine_estimate_ci(r$Difference_di, r$CI_low_di, r$CI_high_di), bg = cell_bg(r$Difference_di, r$CI_low_di, r$CI_high_di, r$pd_di, dp), stripe = stripe, group_rule = group_rule),
-    apa_td(combine_pd_credible(r$pd_di, r$CI_low_di, r$CI_high_di), stripe = stripe, group_rule = group_rule),
-    apa_td(fmt_rope_pct(r$ROPE_Percentage_di), stripe = stripe, group_rule = group_rule)
+    apa_td(combine_pd_credible(r$pd_di, r$CI_low_di, r$CI_high_di), stripe = stripe, group_rule = group_rule)
   )
 }
 
@@ -447,8 +446,91 @@ apa_table <- function(number, title, lead_headers, body_html, note) {
     '<table style="border-collapse:collapse;font-family:\'Times New Roman\',Times,serif;font-size:0.95em;">\n',
     apa_table_head(lead_headers),
     "<tbody>\n", body_html, "\n</tbody>\n</table>\n",
-    sprintf('<p style="font-size:0.85em;max-width:700px;"><em>Note.</em> CrI = credible interval; pd = probability of direction; %% in ROPE = percentage of the posterior distribution falling inside a region of practical equivalence to zero (each parameter\'s own scaled range; see Credibility Criterion), reported for supplementary context and not the basis for calling a comparison credible. A check mark (✓) indicates a comparison for which the 95%% credible interval excludes zero and pd &gt; 97.5%%. %s</p>\n', note)
+    sprintf('<p style="font-size:0.85em;max-width:700px;"><em>Note.</em> CrI = credible interval; pd = probability of direction. A check mark (✓) indicates a comparison for which the 95%% credible interval excludes zero and pd &gt; 97.5%%. %s</p>\n', note)
   )
+}
+
+# One row of the tidy data frame the flextable builder below consumes --
+# same underlying numbers as apa_numeric_cells() above (kept in sync since
+# both read Difference/CI_low/CI_high/pd off the same merged row `r`), just
+# collected instead of turned straight into HTML.
+apa_row_tibble <- function(r, dp, param_label, lead1, lead2, group_rule) {
+  tibble::tibble(
+    param = dp, param_label = param_label, lead1 = lead1, lead2 = lead2,
+    diff_ai = r$Difference_ai, cilo_ai = r$CI_low_ai, cihi_ai = r$CI_high_ai, pd_ai = r$pd_ai,
+    diff_di = r$Difference_di, cilo_di = r$CI_low_di, cihi_di = r$CI_high_di, pd_di = r$pd_di,
+    group_rule = group_rule
+  )
+}
+
+# Builds a real (native, not pasted-HTML) Word table from an apa_row_tibble()
+# data frame, matching the HTML tables' look: two-row spanning header, the
+# Parameter column merged vertically per block, a light rule between
+# parameter blocks, black rules at the top/header-bottom/table-bottom and no
+# vertical rules, alternating row stripe, and mu/bias direction shading
+# (same cell_bg() used for the HTML cells) taking priority over the stripe.
+build_apa_flextable <- function(df, lead_names) {
+  df$stripe <- (seq_len(nrow(df)) %% 2 == 0)
+  disp <- tibble::tibble(
+    param_label = df$param_label, lead1 = df$lead1, lead2 = df$lead2,
+    est_ai = combine_estimate_ci(df$diff_ai, df$cilo_ai, df$cihi_ai),
+    pd_ai = combine_pd_credible(df$pd_ai, df$cilo_ai, df$cihi_ai),
+    est_di = combine_estimate_ci(df$diff_di, df$cilo_di, df$cihi_di),
+    pd_di = combine_pd_credible(df$pd_di, df$cilo_di, df$cihi_di)
+  )
+
+  ft <- flextable::flextable(disp)
+  ft <- flextable::set_header_labels(ft,
+    param_label = lead_names[1], lead1 = lead_names[2], lead2 = lead_names[3],
+    est_ai = "Estimate [95% CrI]", pd_ai = "pd", est_di = "Estimate [95% CrI]", pd_di = "pd"
+  )
+  ft <- flextable::add_header_row(ft, top = TRUE,
+    values = c(lead_names[1], lead_names[2], lead_names[3], "AI", "AI", "DI", "DI"))
+  ft <- flextable::merge_h(ft, part = "header", i = 1)
+  ft <- flextable::merge_v(ft, part = "header", j = 1:3)
+  ft <- flextable::merge_v(ft, j = "param_label", part = "body")
+
+  black <- officer::fp_border(color = "black", width = 1.5)
+  gray <- officer::fp_border(color = "#bbbbbb", width = 0.75)
+  ft <- flextable::border_remove(ft)
+  ft <- flextable::hline_top(ft, part = "header", border = black)
+  ft <- flextable::hline_bottom(ft, part = "header", border = black)
+  ft <- flextable::hline_bottom(ft, part = "body", border = black)
+  group_rows <- which(df$group_rule)
+  if (length(group_rows) > 0) ft <- flextable::hline(ft, i = group_rows - 1, part = "body", border = gray)
+
+  stripe_rows <- which(df$stripe)
+  if (length(stripe_rows) > 0) ft <- flextable::bg(ft, i = stripe_rows, part = "body", bg = STRIPE_BG)
+  for (col in c("est_ai", "est_di")) {
+    is_ai <- col == "est_ai"
+    colors <- mapply(cell_bg,
+      if (is_ai) df$diff_ai else df$diff_di, if (is_ai) df$cilo_ai else df$cilo_di,
+      if (is_ai) df$cihi_ai else df$cihi_di, if (is_ai) df$pd_ai else df$pd_di, df$param)
+    colored <- which(!is.na(colors))
+    for (i in colored) ft <- flextable::bg(ft, i = i, j = col, part = "body", bg = colors[i])
+  }
+
+  ft <- flextable::align(ft, j = c("param_label", "lead1", "lead2"), align = "left", part = "all")
+  ft <- flextable::align(ft, j = c("est_ai", "pd_ai", "est_di", "pd_di"), align = "center", part = "all")
+  ft <- flextable::bg(ft, part = "header", bg = "#eeeeee")
+  ft <- flextable::bold(ft, part = "header")
+  ft <- flextable::font(ft, fontname = "Times New Roman", part = "all")
+  ft <- flextable::fontsize(ft, size = 10, part = "all")
+  ft <- flextable::padding(ft, padding.top = 3, padding.bottom = 3, padding.left = 8, padding.right = 8, part = "all")
+  flextable::autofit(ft)
+}
+
+# Adds one APA-style table (title + flextable + note) to a Word doc, mirroring
+# apa_table()'s HTML layout (bold "Table N", italic title, italic "Note." lead-in).
+docx_add_apa_table <- function(doc, number, title, ft, note) {
+  doc <- officer::body_add_fpar(doc, officer::fpar(officer::ftext(sprintf("Table %d", number), officer::fp_text(bold = TRUE))))
+  doc <- officer::body_add_fpar(doc, officer::fpar(officer::ftext(title, officer::fp_text(italic = TRUE))))
+  doc <- flextable::body_add_flextable(doc, ft)
+  doc <- officer::body_add_fpar(doc, officer::fpar(
+    officer::ftext("Note. ", officer::fp_text(italic = TRUE, font.size = 9)),
+    officer::ftext(paste("CrI = credible interval; pd = probability of direction. A check mark (✓) indicates a comparison for which the 95% credible interval excludes zero and pd > 97.5%.", note), officer::fp_text(font.size = 9))
+  ))
+  doc
 }
 ```
 
@@ -461,6 +543,7 @@ factor_suffix <- c(age.group = "age", condition = "cond", dist = "dist")
 factor_display <- c(age.group = "Age", condition = "Condition", dist = "Dist")
 
 main_effects_body <- character(0)
+main_effects_rows <- list()
 row_idx <- 0
 for (dp_i in seq_along(c("mu", "ndt", "bias", "bs"))) {
   dp <- c("mu", "ndt", "bias", "bs")[dp_i]
@@ -493,15 +576,22 @@ for (dp_i in seq_along(c("mu", "ndt", "bias", "bs"))) {
       apa_numeric_cells(group_rows[[j]]$r, dp, stripe, gr)
     )
     main_effects_body <- c(main_effects_body, paste0("<tr>", row, "</tr>"))
+    main_effects_rows[[length(main_effects_rows) + 1]] <- apa_row_tibble(
+      group_rows[[j]]$r, dp, param_labels[[dp]], group_rows[[j]]$factor, group_rows[[j]]$comparison, gr
+    )
   }
 }
+main_effects_df <- dplyr::bind_rows(main_effects_rows)
+
+table1_title <- "Main Effects of Age, Condition, and Split Type on Drift Diffusion Model Parameters (AI and DI Groups)"
+table1_note <- "Comparisons are marginal (averaged over the two factors not shown in that row). mu and Starting Point (bias) estimate cells are shaded by direction (red = reject-ward, green = accept-ward; vivid = credible, pale = not); Boundary Separation and Non-Decision Time are not directionally shaded because neither points toward either response boundary."
 
 cat(apa_table(
   number = 1,
-  title = "Main Effects of Age, Condition, and Split Type on Drift Diffusion Model Parameters (AI and DI Groups)",
+  title = table1_title,
   lead_headers = c("Parameter", "Factor", "Comparison"),
   body_html = paste(main_effects_body, collapse = "\n"),
-  note = "Comparisons are marginal (averaged over the two factors not shown in that row). mu and Starting Point (bias) estimate cells are shaded by direction (red = reject-ward, green = accept-ward; vivid = credible, pale = not); Boundary Separation and Non-Decision Time are not directionally shaded because neither points toward either response boundary."
+  note = table1_note
 ))
 ```
 
@@ -518,6 +608,7 @@ interaction_dfs <- list(
 )
 
 interaction_body <- character(0)
+interaction_rows <- list()
 row_idx <- 0
 for (dp_i in seq_along(c("mu", "ndt", "bias", "bs"))) {
   dp <- c("mu", "ndt", "bias", "bs")[dp_i]
@@ -539,16 +630,40 @@ for (dp_i in seq_along(c("mu", "ndt", "bias", "bs"))) {
       apa_numeric_cells(r, dp, stripe, gr)
     )
     interaction_body <- c(interaction_body, paste0("<tr>", row, "</tr>"))
+    interaction_rows[[length(interaction_rows) + 1]] <- apa_row_tibble(
+      r, dp, param_labels[[dp]], fmt_cond_label(r$condition), fmt_age_label(r$age.group), gr
+    )
   }
 }
+interaction_df <- dplyr::bind_rows(interaction_rows)
+
+table2_title <- "Equal- vs. Unequal-Split Contrasts by Condition and Age (AI and DI Groups)"
+table2_note <- "Estimates are the equal-minus-unequal contrast within each condition x age cell (the primary results throughout this document). mu and Starting Point (bias) estimate cells are shaded by direction (red = reject-ward, green = accept-ward; vivid = credible, pale = not); Boundary Separation and Non-Decision Time are not directionally shaded because neither points toward either response boundary."
 
 cat(apa_table(
   number = 2,
-  title = "Equal- vs. Unequal-Split Contrasts by Condition and Age (AI and DI Groups)",
+  title = table2_title,
   lead_headers = c("Parameter", "Condition", "Age"),
   body_html = paste(interaction_body, collapse = "\n"),
-  note = "Estimates are the equal-minus-unequal contrast within each condition x age cell (the primary results throughout this document). mu and Starting Point (bias) estimate cells are shaded by direction (red = reject-ward, green = accept-ward; vivid = credible, pale = not); Boundary Separation and Non-Decision Time are not directionally shaded because neither points toward either response boundary."
+  note = table2_note
 ))
+```
+
+## Word version of both tables
+
+The HTML tables above render correctly in the browser/PDF, but copy-pasting an HTML table into Word or Google Docs is not fully reliable (rowspan/colspan and cell shading can drop depending on the importer). `main_effects_df` and `interaction_df`, collected row-by-row alongside the HTML above, drive real Word table objects here instead, written to `ddm-combined-tables.docx` next to this file -- open it directly in Word, or upload it to Google Drive and open with Google Docs, and the merged Parameter cells, shading, and rules come through intact with no copy-paste step.
+
+```{r}
+#| label: apa-tables-docx
+ft1 <- build_apa_flextable(main_effects_df, c("Parameter", "Factor", "Comparison"))
+ft2 <- build_apa_flextable(interaction_df, c("Parameter", "Condition", "Age"))
+
+word_doc <- officer::read_docx() |>
+  docx_add_apa_table(1, table1_title, ft1, table1_note) |>
+  officer::body_add_break() |>
+  docx_add_apa_table(2, table2_title, ft2, table2_note)
+
+print(word_doc, target = here("analysis", "ddm-combined-tables.docx"))
 ```
 
 # Combined Figures
@@ -671,4 +786,4 @@ Disadvantageous inequity aversion required no prompting. From the youngest age t
 
 Advantageous inequity aversion followed a slower and more context-dependent trajectory. Left to their own devices (the autonomous and baseline conditions), children did not reliably object to advantageous unfairness until 8–9 years — three to four years later than their objection to disadvantageous unfairness, and consistent with prior developmental work placing advantageous inequity aversion's spontaneous emergence around that age. An explicit fairness prompt, however, brought this sensitivity forward to 4–5 years, the youngest age tested. Advantageous inequity aversion therefore appears to be present but dormant in younger children, requiring either additional development or explicit framing to become detectable.
 
-This asymmetry is located specifically in drift rate rather than in non-decision time, which carried no reliable signal in either group. Each group additionally recruited one secondary parameter, and the two did not overlap. In the disadvantageous group, starting point shifted credibly in the autonomous and baseline conditions from 6–7 years onward, with no corresponding effect in the advantageous group. In the advantageous group, boundary separation showed a credible secondary pattern in the norm condition — wider boundaries on equal-split trials, present on essentially the same timeline as drift rate itself rather than preceding it, with the autonomous condition showing a smaller version of the same pattern by 8–9 years. Boundary separation's credible cells were close to a subset of drift rate's, indicating that this reflects caution and evidence accumulation moving together once fairness was made explicit, rather than an independent or earlier-emerging process. Boundary separation showed no corresponding signal in the disadvantageous group. This asymmetry itself is well supported, but the advantageous group's boundary-separation finding specifically is more prior-sensitive than its drift-rate finding: a formal check substituting a weakly informative random-effect prior (`ddm-ai.qmd`, Priors > Prior sensitivity check) left only one of its four credible cells standing, whereas the disadvantageous group's already-sparse boundary-separation cells were essentially unaffected by the same check. The two forms of inequity aversion are thus asymmetric not only in when they emerge, but in which secondary process — starting point or boundary separation — accompanies drift rate in carrying the effect, with that second half of the asymmetry resting on a less robust footing for the advantageous group.
+This asymmetry is located specifically in drift rate rather than in non-decision time, which carried no reliable signal in either group. Each group additionally recruited one secondary parameter, and the two did not overlap. In the disadvantageous group, starting point shifted credibly in the autonomous and baseline conditions from 6–7 years onward, with no corresponding effect in the advantageous group. In the advantageous group, boundary separation showed a credible secondary pattern in the norm condition — wider boundaries on equal-split trials, present on essentially the same timeline as drift rate itself rather than preceding it, with the autonomous condition showing a smaller version of the same pattern by 8–9 years. Boundary separation's credible cells were close to a subset of drift rate's, indicating that this reflects caution and evidence accumulation moving together once fairness was made explicit, rather than an independent or earlier-emerging process. Boundary separation showed no corresponding signal in the disadvantageous group. This asymmetry itself is well supported, but the advantageous group's boundary-separation finding specifically is more prior-sensitive than its drift-rate finding: a formal check substituting a weakly informative random-effect prior (`ddm-ai.qmd`, Priors \> Prior sensitivity check) left only one of its four credible cells standing, whereas the disadvantageous group's already-sparse boundary-separation cells were essentially unaffected by the same check. The two forms of inequity aversion are thus asymmetric not only in when they emerge, but in which secondary process — starting point or boundary separation — accompanies drift rate in carrying the effect, with that second half of the asymmetry resting on a less robust footing for the advantageous group.
