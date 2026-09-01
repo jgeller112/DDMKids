@@ -91,17 +91,3 @@ inline R (`modelbased::estimate_contrasts()` + small formatting helpers
 defined in each document) — nothing is hand-typed, so re-running a
 document after refitting updates the write-up automatically.
 
-## Key methodological notes
-
-- **Credibility criterion**: 95% credible interval excludes zero *and*
-  `pd > 97.5%` (probability of direction). ROPE percentages are computed
-  and available (each parameter gets its own scaled range — the automatic
-  default has no supported method for a multi-parameter Wiener/DDM family)
-  but are reported for supplementary context only, not as the primary
-  credibility criterion.
-- **Random effects**: by-subject random intercept/slope for `dist` on `mu`
-  only. Random effects on `ndt`/`bias` were explored and abandoned —
-  individual differences in those parameters aren't well identified from
-  this few trials per subject per cell.
-- See each document's own "Model Specification" section for the full
-  formula, priors, and links.
