@@ -14,9 +14,9 @@ random intercepts and `dist` slopes (`(1 + dist | p | sn)`) shared across
 `mu`, `bs`, and `bias`. See `analysis/ai/ddm-ai.qmd`'s Model
 Specification and Priors sections for the full derivation.
 
-- **`ai_ddm_3way_bs_bias_re.rds`** — Primary AI (Advantageous Inequity)
+- **`ai_ddm_3way_bs_bias_re_ndraws.rds`** — Primary AI (Advantageous Inequity)
   model. Loaded by `analysis/ai/ddm-ai.qmd` and `analysis/ddm-combined.qmd`.
-- **`di_3way_bs_bias_re.rds`** — Primary DI (Disadvantageous Inequity)
+- **`di_3way_bs_bias_re_ndraws.rds`** — Primary DI (Disadvantageous Inequity)
   model, same structure. Loaded by `analysis/di/ddm-di.qmd` and
   `analysis/ddm-combined.qmd`.
 - **`ai_ddm_3way_bs_bias_re_weakprior.rds`** — Same formula and data as

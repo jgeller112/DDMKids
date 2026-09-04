@@ -2,3 +2,8 @@
 
 # Superseded/orphaned files kept locally for reference only; not pushed.
 archive/
+
+# Oversized model files split via Scripts/split_rds.R; the .rds.partNNN
+# chunks are tracked instead and reassembled with combine_rds_file().
+analysis/models/ai_ddm_3way_bs_bias_re_ndraws.rds
+analysis/models/di_3way_bs_bias_re_ndraws.rds
