@@ -5,6 +5,15 @@ Stan/`cmdstanr` backend). Loaded by default (`file_refit = "never"`)
 rather than refit on every render — delete a file here to force a fresh
 fit next render.
 
+Two of the four models below are over GitHub's 100MB push limit and are
+tracked as split `<90MB` chunks (`<name>.rds.partNNN`) instead of the
+raw `.rds`, via `Scripts/split_rds.R`. The `.rds` itself is gitignored
+locally; `analysis/ai/ddm-ai.qmd`, `analysis/di/ddm-di.qmd`, and
+`analysis/ddm-combined.qmd` each recombine the parts back into the
+`.rds` automatically before loading (see that script's README entry).
+To do it manually: `source("Scripts/split_rds.R");
+check_and_combine_rds("analysis/models")`.
+
 ## Currently used
 
 Each of the four `condition:dist:age.group` cells gets its own directly-
@@ -14,11 +23,12 @@ random intercepts and `dist` slopes (`(1 + dist | p | sn)`) shared across
 `mu`, `bs`, and `bias`. See `analysis/ai/ddm-ai.qmd`'s Model
 Specification and Priors sections for the full derivation.
 
-- **`ai_ddm_3way_bs_bias_re_ndraws.rds`** — Primary AI (Advantageous Inequity)
-  model. Loaded by `analysis/ai/ddm-ai.qmd` and `analysis/ddm-combined.qmd`.
-- **`di_3way_bs_bias_re_ndraws.rds`** — Primary DI (Disadvantageous Inequity)
-  model, same structure. Loaded by `analysis/di/ddm-di.qmd` and
+- **`ai_ddm_3way_bs_bias_re_ndraws.rds`** *(split, see above)* — Primary AI
+  (Advantageous Inequity) model. Loaded by `analysis/ai/ddm-ai.qmd` and
   `analysis/ddm-combined.qmd`.
+- **`di_3way_bs_bias_re_ndraws.rds`** *(split, see above)* — Primary DI
+  (Disadvantageous Inequity) model, same structure. Loaded by
+  `analysis/di/ddm-di.qmd` and `analysis/ddm-combined.qmd`.
 - **`ai_ddm_3way_bs_bias_re_weakprior.rds`** — Same formula and data as
   the primary AI model, weakly informative priors throughout instead
   (see below). Loaded only by `analysis/ai/ddm-ai.qmd`'s Prior

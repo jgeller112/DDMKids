@@ -190,9 +190,15 @@ n_postwarmup_draws <- (n_iter - n_warmup) / n_thin * n_chains
 
 The model was fit with `r n_chains` MCMC chains of `r n_iter` iterations each (`r n_warmup` warmup), thinned by `r n_thin`, yielding `r n_postwarmup_draws` post-warmup draws. The target average Metropolis acceptance probability (`adapt_delta`) was set to `r adapt_delta_val` and maximum treedepth to `r max_treedepth_val`, both raised above `brms`'s defaults to accommodate the added sampling difficulty from `bias`'s full factorial structure and, now, `bs`'s and `bias`'s random effects.
 
-`file` points at the model already fit outside this document (same formula, same 1244-row `explicit_ai`), cached in `analysis/models/` — `brm()`'s default `file_refit = "never"` means it just loads that `.rds` and skips fitting entirely on render, rather than re-running MCMC every time. Resolved via `here()` rather than a relative path for the same reason as the data path above.
+`file` points at the model already fit outside this document (same formula, same 1244-row `explicit_ai`), cached in `analysis/models/` — `brm()`'s default `file_refit = "never"` means it just loads that `.rds` and skips fitting entirely on render, rather than re-running MCMC every time. Resolved via `here()` rather than a relative path for the same reason as the data path above. Split `.rds` parts (see `Scripts/split_rds.R`) are recombined before loading, if any exist.
 
-This points at `ai_ddm_3way_bs_bias_re`, not `ai_ddm_3way_bs_re` — the latter is the prior fit, kept on disk for reference/comparison, in which only `bs` had by-subject random effects. `ai_ddm_3way_bs_bias_re` adds the same `(1 + dist | p | sn)` random effects to `bias` too, joining the correlated random-effects block that already spanned `mu` and `bs` (see Fixed and random effects). As with `bs`'s random effects, this is a re-attempt of something explicitly flagged as risky earlier in this document — check the Convergence section below carefully before trusting any Results that depend on this fit; if it reproduces the earlier severe-divergence failure mode, the right fallback is reverting to `ai_ddm_3way_bs_re` (random effects on `bs` only, not `bias`), not pushing through with a poorly-converged fit.
+This points at `ai_ddm_3way_bs_bias_re_ndraws`, not `ai_ddm_3way_bs_re` — the latter is the prior fit, kept on disk for reference/comparison, in which only `bs` had by-subject random effects. `ai_ddm_3way_bs_bias_re_ndraws` adds the same `(1 + dist | p | sn)` random effects to `bias` too, joining the correlated random-effects block that already spanned `mu` and `bs` (see Fixed and random effects). As with `bs`'s random effects, this is a re-attempt of something explicitly flagged as risky earlier in this document — check the Convergence section below carefully before trusting any Results that depend on this fit; if it reproduces the earlier severe-divergence failure mode, the right fallback is reverting to `ai_ddm_3way_bs_re` (random effects on `bs` only, not `bias`), not pushing through with a poorly-converged fit.
+
+```{r}
+#| label: recombine-split-models
+source(here("Scripts", "split_rds.R"))
+check_and_combine_rds(here("analysis", "models"))
+```
 
 ```{r}
 #| label: fit
@@ -203,7 +209,7 @@ fit_ai <- brm(formula_ai,
   chains = n_chains, cores = n_chains,
   iter = n_iter, warmup = n_warmup, sample_prior = TRUE,
   save_pars = save_pars(all = TRUE), thin = n_thin,
-  file = here("analysis", "models", "ai_ddm_3way_bs_bias_re"),
+  file = here("analysis", "models", "ai_ddm_3way_bs_bias_re_ndraws"),
   control = list(adapt_delta = adapt_delta_val, max_treedepth = max_treedepth_val),
   backend = "cmdstanr", threads = threading(2)
 )

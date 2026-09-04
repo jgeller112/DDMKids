@@ -197,7 +197,7 @@ fit_di <- brm(formula_di,
   chains = n_chains, cores = n_chains,
   iter = n_iter, warmup = n_warmup, sample_prior = TRUE,
   save_pars = save_pars(all = TRUE), thin = n_thin,
-  file = here("analysis", "models", "di_3way_bs_bias_re"),
+  file = here("analysis", "models", "di_3way_bs_bias_re_ndraws"),
   control = list(adapt_delta = adapt_delta_val, max_treedepth = max_treedepth_val),
   backend = "cmdstanr", threads = threading(2)
 )
