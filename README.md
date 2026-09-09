@@ -28,8 +28,8 @@ analysis/
   ai/ddm-ai.qmd                     AI-group model, results, and write-up
   di/ddm-di.qmd                     DI-group model, results, and write-up
   models/
-    ai_ddm_3way_bias1.rds           Cached AI model fit
-    di_3way_full.rds                Cached DI model fit
+    ai_ddm_3way_bs_bias_re_ndraws.rds           Cached AI model fit
+    di_3way_bs_bias_re_ndraws.rds                Cached DI model fit
 
 LICENSE                             MIT
 ```
@@ -90,4 +90,3 @@ prose in both documents is pulled live from the fitted models via
 inline R (`modelbased::estimate_contrasts()` + small formatting helpers
 defined in each document) — nothing is hand-typed, so re-running a
 document after refitting updates the write-up automatically.
-
