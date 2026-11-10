@@ -1,99 +1,96 @@
 # analysis/models/
 
 Cached `brms` model fits (hierarchical Bayesian Wiener diffusion models,
-Stan/`cmdstanr` backend). Loaded by default (`file_refit = "never"`)
-rather than refit on every render — delete a file here to force a fresh
-fit next render.
+Stan/`cmdstanr` backend), produced and kept up to date by the `targets`
+pipeline (`_targets.R` at the project root). Don't edit or create files here
+by hand: the model is defined in `R/models.R` and fit with
+`targets::tar_make()`.
 
-Two of the four models below are over GitHub's 100MB push limit and are
-tracked as split `<90MB` chunks (`<name>.rds.partNNN`) instead of the
-raw `.rds`, via `Scripts/split_rds.R`. The `.rds` itself is gitignored
-locally; `analysis/ai/ddm-ai.qmd`, `analysis/di/ddm-di.qmd`, and
-`analysis/ddm-combined.qmd` each recombine the parts back into the
-`.rds` automatically before loading (see that script's README entry).
-To do it manually: `source("Scripts/split_rds.R");
-check_and_combine_rds("analysis/models")`.
+## How the cache works
 
-## Currently used
+Each file is written by `fit_ddm()` (`R/models.R`) through
+`brm(file = ..., file_refit = "on_change")`:
 
-Each of the four `condition:dist:age.group` cells gets its own directly-
-interpretable parameter (`0 + condition:dist:age.group` cell-means
-coding) on `mu`, `ndt`, `bias`, and `bs`, with correlated by-subject
-random intercepts and `dist` slopes (`(1 + dist | p | sn)`) shared across
-`mu`, `bs`, and `bias`. See `analysis/ai/ddm-ai.qmd`'s Model
-Specification and Priors sections for the full derivation.
+- A saved fit is **reloaded** unless the Stan code, the data, or the sampler
+  settings (`sampler_settings()`: chains, iterations, warmup, thinning)
+  have changed. In that case it is **refit**, which takes hours.
+- Fits over GitHub's 100 MB push limit are committed as `<90 MB` chunks
+  (`<name>.rds.partNNN`, via `Scripts/split_rds.R`). The full `.rds` is
+  git-ignored. `fit_ddm()` rebuilds it from the chunks on a fresh clone,
+  or when the chunks are newer than the local `.rds` (e.g. after pulling a
+  collaborator's refit), and writes fresh chunks after a refit.
+- To force a refit, delete the `.rds` and its `.partNNN` chunks, then run
+  `targets::tar_make()`.
 
-- **`ai_ddm_3way_bs_bias_re_ndraws.rds`** *(split, see above)* — Primary AI
-  (Advantageous Inequity) model. Loaded by `analysis/ai/ddm-ai.qmd` and
-  `analysis/ddm-combined.qmd`.
-- **`di_3way_bs_bias_re_ndraws.rds`** *(split, see above)* — Primary DI
-  (Disadvantageous Inequity) model, same structure. Loaded by
-  `analysis/di/ddm-di.qmd` and `analysis/ddm-combined.qmd`.
-- **`ai_ddm_3way_bs_bias_re_weakprior.rds`** — Same formula and data as
-  the primary AI model, weakly informative priors throughout instead
-  (see below). Loaded only by `analysis/ai/ddm-ai.qmd`'s Prior
-  sensitivity check.
-- **`di_3way_bs_bias_re_weakprior.rds`** — Same, for DI. Loaded only by
-  `analysis/di/ddm-di.qmd`'s Prior sensitivity check.
+## Models
 
-### Priors used in the primary models (informative)
+All four models share one definition (`R/models.R`): the same formula,
+family, starting values, and sampler settings (4 chains x 5000 iterations,
+1000 warmup, thin 1 = 16,000 post-warmup draws). They differ only in
+data (AI vs DI) and prior.
 
-```r
-prior(normal(0, 1), class = b) +                                      # drift rate (mu) fixed effects
-prior(normal(0.3, 0.1), class = b, dpar = ndt, lb = 0, ub = "min_Y") + # ndt fixed effects
-prior(normal(0, 1), class = b, dpar = bias) +                         # bias, logit scale
-prior(normal(2, 1), class = b, dpar = bs, lb = 0) +                   # bs fixed effects
-prior(normal(0, 0.03), class = sd, group = sn, lb = 0) +              # by-subject REs (mu)
-prior(normal(0, 0.03), class = sd, dpar = bs, group = sn, lb = 0) +   # by-subject REs (bs)
-prior(normal(0, 0.03), class = sd, dpar = bias, group = sn, lb = 0)   # by-subject REs (bias)
-```
+| File | Pipeline target | Group | Prior | Used in |
+|---|---|---|---|---|
+| `ai_ddm_3way_bs_bias_re_ndraws.rds` | `fit_ai_informative` | AI | Primary | **Paper**; `ai/ddm-ai.qmd`, `ddm-combined.qmd` |
+| `di_3way_bs_bias_re_ndraws.rds` | `fit_di_informative` | DI | Primary | **Paper**; `di/ddm-di.qmd`, `ddm-combined.qmd` |
+| `ai_ddm_3way_bs_bias_re_weakprior.rds` | `fit_ai_weak` | AI | Sensitivity | Prior sensitivity check in `ai/ddm-ai.qmd` |
+| `di_3way_bs_bias_re_weakprior.rds` | `fit_di_weak` | DI | Sensitivity | Prior sensitivity check in `di/ddm-di.qmd` |
 
-The fixed-effect priors (`mu`/`bias`/`bs`) are weakly informative — posterior
-SDs come back an order of magnitude narrower than the prior. The
-`normal(0, 0.03)` random-effect SD priors are deliberately **informative**,
-not weakly informative: this scale is considerably tighter than
-field-standard defaults (HDDM's `HalfNormal(2)`/`0.1`/`0.05` for the
-analogous parameters; Wiecki et al., 2013), chosen because looser priors
-produced severe sampler divergence on this project's sparse per-subject
-data (134 AI / 125 DI subjects, median 5 trials per subject per
-`dist` level). See `ddm-ai.qmd`'s Priors section for the full
-justification.
+`mu` (drift rate), `ndt` (non-decision time), `bias` (starting point), and
+`bs` (boundary separation) each get `0 + condition:dist:age.group`
+cell-means coding, which gives one directly interpretable parameter per cell
+(3 conditions x 2 split types x 3 age groups = 18 cells). `mu`, `bs`, and
+`bias` share correlated by-subject random intercepts and `dist` slopes
+(`(1 + dist | p | sn)`). `ndt` has no random effects. See the Model
+Specification section of `ai/ddm-ai.qmd` for the rationale.
 
-### Priors used in the weak-prior sensitivity-check models
+## Priors
 
-```r
-prior(normal(0, 3), class = b) +                                      # drift rate -- 3x wider
-prior(normal(0.3, 0.3), class = b, dpar = ndt, lb = 0, ub = "min_Y") + # ndt -- 3x wider SD, same structural bounds
-prior(normal(0, 3), class = b, dpar = bias) +                         # bias -- 3x wider
-prior(normal(2, 3), class = b, dpar = bs, lb = 0) +                   # bs -- 3x wider
-prior(normal(0, 2), class = sd, group = sn, lb = 0) +                 # by-subject REs (mu) -- HDDM's own default scale
-prior(normal(0, 0.1), class = sd, dpar = bs, group = sn, lb = 0) +    # by-subject REs (bs) -- HDDM's own default scale
-prior(normal(0, 0.05), class = sd, dpar = bias, group = sn, lb = 0)   # by-subject REs (bias) -- HDDM's own default scale
-```
+Both priors are **weakly informative on the fixed effects**. What the
+sensitivity check varies is the **random-effect SD prior**: tight in the
+primary model, HDDM's defaults (Wiecki et al., 2013) in the sensitivity
+model. The file names and target names say "weak" for short, but the
+sensitivity model is not flat or uninformative.
 
-Fixed-effect SDs are tripled (low-stakes, since even the tighter primary
-priors are already dominated by the likelihood). `ndt` keeps its
-`[0, min_Y]` truncation in both versions — a structural identifiability
-requirement, not a strength-of-belief choice. The random-effect SDs
-switch to HDDM's own default scales, the literature-standard alternative
-to the tight `0.03` used in the primary models.
+| Parameter | Primary (`ddm_prior_informative()`) | Sensitivity (`ddm_prior_weak()`) | Change |
+|---|---|---|---|
+| `mu` fixed effects | Normal(0, 1) | Normal(0, 3) | 3x wider |
+| `ndt` fixed effects | Normal(0.3, 0.1), [0, min RT] | Normal(0.3, 0.3), [0, min RT] | 3x wider |
+| `bias` fixed effects (logit) | Normal(0, 1) | Normal(0, 3) | 3x wider |
+| `bs` fixed effects | Normal(2, 1), > 0 | Normal(2, 3), > 0 | 3x wider |
+| `mu` random-effect SDs | Normal⁺(0, 0.03) | Normal⁺(0, 2) | ~67x wider |
+| `bs` random-effect SDs | Normal⁺(0, 0.03) | Normal⁺(0, 0.1) | ~3x wider |
+| `bias` random-effect SDs (logit) | Normal⁺(0, 0.03) | Normal⁺(0, 0.05) | ~1.7x wider |
 
-Both weak-prior fits converge cleanly (0 divergences, Rhat < 1.01 in
-both groups) but are not substantively equivalent to the primary models.
-Comparing the same `dist` (equal-vs-unequal) contrasts by
-condition x age.group:
+- **Fixed effects:** posterior SDs come out an order of magnitude narrower
+  than either prior, so the data, not the prior, drive these estimates.
+  `ndt` keeps its `[0, min RT]` truncation in both. That bound is a
+  structural identifiability requirement, not a strength-of-belief choice.
+- **Random-effect SDs:** the primary model's `Normal⁺(0, 0.03)` is
+  deliberately **informative**, much tighter than field-standard defaults.
+  It was chosen because looser priors produced severe sampler divergence in
+  earlier versions of this model on sparse per-subject data (134 AI / 125
+  DI subjects, median 5 trials per subject per `dist` level). See the Priors
+  section of `ai/ddm-ai.qmd` for the full justification.
 
-| Parameter | AI: informative -> weak | DI: informative -> weak |
+## Sensitivity results
+
+Both sensitivity fits converge cleanly (0 divergences; max Rhat 1.006 AI,
+1.002 DI).
+
+Number of credible equal-vs-unequal (`dist`) contrasts, out of 9
+condition x age-group cells:
+
+| Parameter | AI: primary -> sensitivity | DI: primary -> sensitivity |
 |---|---|---|
-| Drift rate | 5/9 -> 3/9 credible | 9/9 -> 8/9 credible |
-| Non-decision time | 3/9 -> 3/9 (net unchanged) | 0/9 -> 1/9 |
+| Drift rate | 5/9 -> 3/9 | 9/9 -> 8/9 |
+| Non-decision time | 3/9 -> 3/9 (1 lost, 1 gained) | 0/9 -> 0/9 |
 | Starting point | 1/9 -> 1/9 | 4/9 -> 5/9 |
 | Boundary separation | 4/9 -> **1/9** | 2/9 -> 1/9 |
 
-AI's boundary-separation findings are prior-sensitive — most of the
-"norm condition widens boundaries" result rests on the tight `0.03`
-prior rather than surviving under a field-standard alternative. DI's
-results are essentially prior-robust throughout (at most one cell
-changes status per parameter, none of them cells the write-up leans on).
-See each document's Prior sensitivity check section for the full
-breakdown and which specific cells flip.
+AI's boundary-separation findings depend on the prior: most of the "norm
+condition widens boundaries" result rests on the tight random-effect prior
+and does not hold up under HDDM's defaults. DI's results are essentially
+unaffected by the prior (at most one cell changes per parameter, none of
+them cells the write-up relies on). See each document's Prior sensitivity
+check section for which cells flip.

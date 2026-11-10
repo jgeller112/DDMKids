@@ -19,6 +19,7 @@ library(tidybayes)
 library(patchwork)
 library(knitr)
 library(here)
+library(targets)
 
 options(
   scipen = 999,
@@ -30,12 +31,33 @@ options(
 )
 ```
 
-Shared preprocessing lives in `Scripts/data_prep.R` so the AI and DI documents can't drift out of sync on exclusion criteria. This produces `explicit_ai` (and `explicit_di`, unused here). Paths use `here::here()`, resolved from the project root, so this works regardless of which directory actually renders the document.
+This document is rendered by the `targets` pipeline (`_targets.R`; run `targets::tar_make()` from the project root) and only reads its results. The model definition — formula, family, priors, starting values, and sampler settings — lives once in `R/models.R`, shared with the DI group; the code shown in the Model Specification chunks below is pulled from that file with `knitr::read_chunk()`, so it is exactly what was fit. Shared preprocessing lives in `Scripts/data_prep.R`, run once by the pipeline as the `prepped_data` target, so the AI and DI groups can't drift out of sync on exclusion criteria. Paths use `here::here()`, resolved from the project root, so this works regardless of which directory actually renders the document.
+
+```{r}
+#| label: model-definition
+source(here("R", "models.R"))
+source(here("R", "sensitivity.R"))
+register_model_chunks()
+```
 
 ```{r}
 #| label: data
-source(here("Scripts", "data_prep.R"))
+store <- here("_targets")
+explicit_ai <- tar_read(prepped_data, store = store)$ai
 head(explicit_ai)
+```
+
+```{r}
+#| label: sensitivity-summaries
+# Primary vs weak-prior fit: equal - unequal contrasts and convergence,
+# computed by the pipeline (summarize_fit() in R/sensitivity.R) and quoted
+# inline in the Prior sensitivity check below.
+sens_main <- tar_read(summary_ai_informative, store = store)
+sens_weak <- tar_read(summary_ai_weak, store = store)
+sens_changes <- lapply(
+  setNames(nm = names(ddm_parameters)),
+  function(p) credibility_changes(sens_main, sens_weak, p)
+)
 ```
 
 # Model Specification
@@ -47,16 +69,7 @@ We modeled response time and choice jointly with a hierarchical Bayesian drift d
 `mu`, `ndt`, `bias`, and `bs` were each modeled with the full `condition * dist * age.group` factorial structure, using `0 + condition:dist:age.group` (cell-means) coding, which assigns a single directly-interpretable parameter to each of the 18 condition x dist x age group cells rather than decomposing them into main effects and interactions. This coding was adopted because it is a necessary condition for assigning every cell an equal prior: under the conventional main-effects-plus-interactions expansion, a shared prior scale on every coefficient does not translate into an equal implied prior on every cell's mean, since cells differ in how many coefficients are summed to construct them. A prior-predictive check (posterior draws generated from the prior alone) confirmed that the conventional coding produces up to 2.7-fold differences in implied prior SD across cells, whereas the cell-means coding used here flattens this to within 5-11%. `bs` was estimated as a single, freely-varying parameter with no predictors, and `bias` was fixed at 0.5 (unbiased), in earlier model iterations before each being given this same full factorial structure. By-subject random intercepts and slopes for `dist` were included on `mu` only (`(1 + dist | p | sn)`) in earlier iterations; random effects on `ndt`, `bias`, and `bs` were explored during that development and abandoned after producing severe divergences, when `bs` was still a single global parameter — with this few trials per subject per condition/allocation cell, individual differences in non-decision time and starting point are still not well identified separately from individual differences in drift rate. `bs` and `bias` have since been revisited: now that both have the same full factorial structure as `mu` (unlike the earlier attempt, where `bias` was still fixed at 0.5 and `bs` was still a single global parameter), they also get the same `(1 + dist | p | sn)` by-subject random intercept and `dist` slope, sharing the group id `p` with `mu`'s random effects — so `brms` estimates one correlated 6-dimensional random-effects block (intercept + `dist` slope, for each of `mu`, `bs`, and `bias`) per subject, rather than three independent 2-dimensional ones. `ndt` still has no random effects; unlike `bias`, it never had the fixed-effects-structure confound (it always had the full factorial structure), so its earlier divergences are more likely a genuine identifiability limit rather than an artifact worth revisiting.
 
 ```{r}
-#| label: formula
-formula_ai <- bf(
-  duration | dec(dec_recode) ~ 0 + condition:dist:age.group +
-    (1 + dist | p | sn),
-  ndt ~ 0 + condition:dist:age.group,
-  bias ~ 0 + condition:dist:age.group +
-    (1 + dist | p | sn),
-  bs ~ 0 + condition:dist:age.group +
-    (1 + dist | p | sn)
-)
+#| label: ddm-formula
 ```
 
 ## Link functions
@@ -69,29 +82,20 @@ formula_ai <- bf(
 | `bs` | boundary separation | identity | now has the full `condition:dist:age.group` structure (like `ndt`/`bias`), so it's an unconstrained linear predictor at the Stan-declaration level; positivity is enforced via the prior's `lb = 0`, not the link — same mechanism as `ndt` |
 
 ```{r}
-#| label: family
-family_ai <- wiener(link_bs = "identity", link_ndt = "identity", link_bias = "logit")
+#| label: ddm-family
 ```
 
 ## Priors
 
-Priors were specified for every modeled parameter and were not uniformly weakly informative. For the fixed effects, drift rate, starting point, and boundary separation received weakly informative priors — Normal(0, 1) on drift rate, Normal(0, 1) (logit scale) on starting point, and Normal(2, 1) truncated to be positive on boundary separation — and their posterior SDs came back an order of magnitude narrower than these priors, indicating the data, not the prior, determined the estimates. Non-decision time received a more concentrated fixed-effect prior, Normal(0.3, 0.1) truncated to \[0, minimum RT\], reflecting its comparatively weak identifiability from RT and choice data alone. By-subject random intercepts and slopes for split type (equal vs. unequal) were included on drift rate, boundary separation, and starting point, correlated within subject; their standard deviations used a deliberately **informative** — not weakly informative — Normal(0, 0.03) truncated-positive prior, considerably tighter than field-standard defaults (e.g., HDDM's HalfNormal(2), HalfNormal(0.1), and HalfNormal(0.05) for the analogous parameters; Wiecki et al., 2013). This departure from convention was empirically motivated: with a median of only 5 trials per subject per split-type condition (range 2–6; 134 subjects), looser random-effect priors produced severe sampler divergence in earlier, less-structured versions of this model. A second, fully-fit model using weakly informative priors throughout — including HDDM's own default scales on the random-effect SDs — was run as a formal sensitivity check (see Prior sensitivity check below), and unlike that earlier divergence history, it now converges cleanly (0 divergences, Rhat \< 1.01). It is not, however, substantively equivalent: switching to the weak prior costs drift rate 2 of its 5 credible condition-by-age cells and boundary separation 3 of its 4, while starting point and non-decision time are essentially unchanged. Boundary separation's findings in particular should be read as prior-sensitive rather than as robust as drift rate's — see Prior sensitivity check for the full breakdown and Boundary Separation below for how this qualifies those results. This is a different question from the one addressed in Justification for the random-effect prior scale, point 5 below, which is easy to conflate with this one since both are called "robustness checks." That earlier check, from before `bs` and `bias` had random effects at all, compares the current model against `ai_ddm_3way_bs` — an earlier cached fit from back when `bs`/`bias` had no `(1 + dist | p | sn)` term — with the `0.03` prior held fixed in both. It found \~zero credibility reversals, but it is asking "does adding random effects to `bs`/`bias` change the results," not "does the random-effect prior's *scale* change the results." Both models in that comparison have the same tight prior; both models in *this* comparison have the same random-effects structure. They are independent questions, and only this one — prior scale — turned out to matter for boundary separation.
+Priors were specified for every modeled parameter and were not uniformly weakly informative. For the fixed effects, drift rate, starting point, and boundary separation received weakly informative priors — Normal(0, 1) on drift rate, Normal(0, 1) (logit scale) on starting point, and Normal(2, 1) truncated to be positive on boundary separation — and their posterior SDs came back an order of magnitude narrower than these priors, indicating the data, not the prior, determined the estimates. Non-decision time received a more concentrated fixed-effect prior, Normal(0.3, 0.1) truncated to \[0, minimum RT\], reflecting its comparatively weak identifiability from RT and choice data alone. By-subject random intercepts and slopes for split type (equal vs. unequal) were included on drift rate, boundary separation, and starting point, correlated within subject; their standard deviations used a deliberately **informative** — not weakly informative — Normal(0, 0.03) truncated-positive prior, considerably tighter than field-standard defaults (e.g., HDDM's HalfNormal(2), HalfNormal(0.1), and HalfNormal(0.05) for the analogous parameters; Wiecki et al., 2013). This departure from convention was empirically motivated: with a median of only 5 trials per subject per split-type condition (range 2–6; 134 subjects), looser random-effect priors produced severe sampler divergence in earlier, less-structured versions of this model. A second, fully-fit model using weakly informative priors throughout — including HDDM's own default scales on the random-effect SDs — was run as a formal sensitivity check (see Prior sensitivity check below), and unlike that earlier divergence history, it now converges cleanly (`r sens_weak$divergences` divergences, max Rhat `r sprintf('%.3f', sens_weak$max_rhat)`). It is not, however, substantively equivalent: switching to the weak prior costs drift rate `r length(sens_changes$mu$lost)` of its `r sens_changes$mu$n_main` credible condition-by-age cells and boundary separation `r length(sens_changes$bs$lost)` of its `r sens_changes$bs$n_main`, while starting point and non-decision time are essentially unchanged. Boundary separation's findings in particular should be read as prior-sensitive rather than as robust as drift rate's — see Prior sensitivity check for the full breakdown and Boundary Separation below for how this qualifies those results. This is a different question from the one addressed in Justification for the random-effect prior scale, point 5 below, which is easy to conflate with this one since both are called "robustness checks." That earlier check, from before `bs` and `bias` had random effects at all, compares the current model against `ai_ddm_3way_bs` — an earlier cached fit from back when `bs`/`bias` had no `(1 + dist | p | sn)` term — with the `0.03` prior held fixed in both. It found \~zero credibility reversals, but it is asking "does adding random effects to `bs`/`bias` change the results," not "does the random-effect prior's *scale* change the results." Both models in that comparison have the same tight prior; both models in *this* comparison have the same random-effects structure. They are independent questions, and only this one — prior scale — turned out to matter for boundary separation.
 
 ```{r}
-#| label: prior
-bprior_ai <-
-  prior(normal(0, 1), class = b) +                                      # drift rate (mu) fixed effects
-  prior(normal(0.3, 0.1), class = b, dpar = ndt, lb = 0, ub = "min_Y") + # ndt fixed effects
-  prior(normal(0, 1), class = b, dpar = bias) +                         # bias, logit scale: 0.5 <-> logit 0
-  prior(normal(2, 1), class = b, dpar = bs, lb = 0) +                   # bs fixed effects; centered near the pooled single-parameter fit (~2.6)
-  prior(normal(0, 0.03), class = sd, group = sn, lb = 0) +              # by-subject random effects (mu)
-  prior(normal(0, 0.03), class = sd, dpar = bs, group = sn, lb = 0) +   # by-subject random effects (bs) -- same tight scale as mu, made explicit
-  prior(normal(0, 0.03), class = sd, dpar = bias, group = sn, lb = 0)  # by-subject random effects (bias, logit scale) -- same tight scale again
+#| label: ddm-prior-informative
 ```
 
 ```{r}
 #| label: prior-table
-bprior_ai |>
+ddm_prior("informative") |>
   as.data.frame() |>
   dplyr::select(prior, class, dpar, group, lb, ub) |>
   dplyr::mutate(dplyr::across(everything(), ~ dplyr::na_if(as.character(.x), ""))) |>
@@ -107,131 +111,64 @@ bprior_ai |>
 ### Prior sensitivity check: weak vs. informative
 
 ```{r}
-#| label: prior-weak
-bprior_ai_weak <-
-  prior(normal(0, 3), class = b) +                                      # drift rate (mu) fixed effects -- 3x wider
-  prior(normal(0.3, 0.3), class = b, dpar = ndt, lb = 0, ub = "min_Y") + # ndt fixed effects -- 3x wider SD, same structural bounds
-  prior(normal(0, 3), class = b, dpar = bias) +                         # bias, logit scale -- 3x wider
-  prior(normal(2, 3), class = b, dpar = bs, lb = 0) +                   # bs fixed effects -- 3x wider
-  prior(normal(0, 2), class = sd, group = sn, lb = 0) +                 # by-subject REs (mu) -- HDDM's own default scale
-  prior(normal(0, 0.1), class = sd, dpar = bs, group = sn, lb = 0) +    # by-subject REs (bs) -- HDDM's own default scale
-  prior(normal(0, 0.05), class = sd, dpar = bias, group = sn, lb = 0)  # by-subject REs (bias) -- HDDM's own default scale
+#| label: ddm-prior-weak
 ```
+
+The fit itself (`fit_ai_weak`) is loaded in the Estimation section below. It uses the same starting-value function as the main fit (`ddm_inits()`, below), built from its own prior.
+
+**Results.** `fit_ai_weak` converges as cleanly as the main model (`r convergence_text(sens_weak)`) — the earlier divergence history under looser priors does not reproduce once `bs` and `bias` have the full factorial fixed-effects structure. Convergence is not the same as agreement, though. Comparing the same `dist` (equal-vs-unequal) contrasts, by condition x age.group, that the Results section below reports:
 
 ```{r}
-#| label: init-weak
-tmp_dat_ai_weak <- make_standata(formula_ai,
-  family = family_ai,
-  data = explicit_ai, prior = bprior_ai_weak
-)
-
-initfun_ai_weak <- function() {
-  list(
-    b = rnorm(tmp_dat_ai_weak$K, 0, 0.2),
-    b_bs = rnorm(tmp_dat_ai_weak$K_bs, 2, 0.3),
-    b_ndt = runif(tmp_dat_ai_weak$K_ndt, 0.001, 0.05),
-    b_bias = rnorm(tmp_dat_ai_weak$K_bias, 0, 0.1),
-    sd_1 = runif(tmp_dat_ai_weak$M_1, 0.05, 0.1),
-    z_1 = matrix(rnorm(tmp_dat_ai_weak$M_1 * tmp_dat_ai_weak$N_1, 0, 0.01), tmp_dat_ai_weak$M_1, tmp_dat_ai_weak$N_1),
-    L_1 = diag(tmp_dat_ai_weak$M_1)
-  )
-}
+#| label: sensitivity-table
+knitr::kable(sensitivity_table(sens_main, sens_weak))
 ```
 
-The fit itself (`fit_ai_weak`) is deferred to the Estimation section below, once the sampler settings shared with the main fit are defined.
-
-**Results.** `fit_ai_weak` converges as cleanly as the main model (0 divergent transitions, max Rhat 1.003 across 4 chains x 10,000 iterations) — the earlier divergence history under looser priors does not reproduce once `bs` and `bias` have the full factorial fixed-effects structure. Convergence is not the same as agreement, though. Comparing the same `dist` (equal-vs-unequal) contrasts, by condition x age.group, that the Results section below reports:
-
-| Parameter | Credible cells, informative prior | Credible cells, weak prior | Cells that flip |
-|------------------|------------------|------------------|------------------|
-| Drift rate | 5 / 9 | 3 / 9 | 2 (both lost: norm\@4-5y, baseline\@8-9y) |
-| Non-decision time | 3 / 9 | 3 / 9 | 2 (1 gained, 1 lost — net unchanged) |
-| Starting point | 1 / 9 | 1 / 9 | 0 |
-| Boundary separation | 4 / 9 | 1 / 9 | 3 (all lost) |
-
-Drift rate and starting point are largely prior-robust: drift rate's two lost cells (norm\@4-5y: -0.557 \[-1.04, -0.08\] -\> -0.707 \[-1.70, 0.29\]; baseline\@8-9y: -0.63 \[-1.03, -0.23\] -\> -0.781 \[-1.62, 0.05\]) keep the same sign and roughly the same point estimate under the weak prior — the interval simply widens past zero, which is the expected behavior of removing a regularizing prior on sparse per-subject data, not evidence the effect is spurious. Boundary separation is not robust: norm\@4-5y, norm\@6-7y, and autonomous\@8-9y all lose credibility, leaving only norm\@8-9y — exactly the cells that carry the "norm widens boundaries specifically on equal-split trials, from the youngest age tested" claim in the Results section below. That claim should be read as resting substantially on the choice of a tight, empirically-motivated-but-nonstandard random-effect prior, not as a finding that would survive a field-standard prior specification. See Boundary Separation below for how this qualifies that section's conclusions.
+Drift rate and starting point are largely prior-robust: drift rate's two lost cells (norm\@4-5y: `r cell_change(sens_main, sens_weak, "mu", "norm", "4&5")`; baseline\@8-9y: `r cell_change(sens_main, sens_weak, "mu", "baseline", "8&9")`) keep the same sign and roughly the same point estimate under the weak prior — the interval simply widens past zero, which is the expected behavior of removing a regularizing prior on sparse per-subject data, not evidence the effect is spurious. Boundary separation is not robust: `r list_cells(sens_changes$bs$lost)` all lose credibility, leaving only `r list_cells(sens_changes$bs$kept)` — exactly the cells that carry the "norm widens boundaries specifically on equal-split trials, from the youngest age tested" claim in the Results section below. That claim should be read as resting substantially on the choice of a tight, empirically-motivated-but-nonstandard random-effect prior, not as a finding that would survive a field-standard prior specification. See Boundary Separation below for how this qualifies that section's conclusions.
 
 Custom starting values, since default inits tend to land somewhere the wiener likelihood can't evaluate.
 
 ```{r}
-#| label: init
-tmp_dat_ai <- make_standata(formula_ai,
-  family = family_ai,
-  data = explicit_ai, prior = bprior_ai
-)
-
-initfun_ai <- function() {
-  list(
-    b = rnorm(tmp_dat_ai$K, 0, 0.2),
-    b_bs = rnorm(tmp_dat_ai$K_bs, 2, 0.3),
-    b_ndt = runif(tmp_dat_ai$K_ndt, 0.001, 0.05),
-    b_bias = rnorm(tmp_dat_ai$K_bias, 0, 0.1),
-    sd_1 = runif(tmp_dat_ai$M_1, 0.05, 0.1),
-    z_1 = matrix(rnorm(tmp_dat_ai$M_1 * tmp_dat_ai$N_1, 0, 0.01), tmp_dat_ai$M_1, tmp_dat_ai$N_1),
-    L_1 = diag(tmp_dat_ai$M_1)
-  )
-}
+#| label: ddm-inits
 ```
 
 ## Estimation
 
-Sampler settings named here so the Methods-style description below and the actual `brm()` call can't drift apart — change one, both update.
+Sampler settings are defined once in `R/models.R` and used both by the pipeline's `brm()` call (`fit_ddm()`) and by the Methods-style description below, so the two can't drift apart. `fit_ddm()` also checks the saved fit's chains, iterations, warmup, and thinning against these settings and refits if they differ.
 
 ```{r}
 #| label: sampler-settings
-n_chains <- 4
-n_iter <- 10000
-n_warmup <- 500
-n_thin <- 10
-adapt_delta_val <- .95
-max_treedepth_val <- 15
-n_postwarmup_draws <- (n_iter - n_warmup) / n_thin * n_chains
+```
+
+```{r}
+#| label: sampler-values
+settings <- sampler_settings()
+n_chains <- settings$chains
+n_iter <- settings$iter
+n_warmup <- settings$warmup
+n_thin <- settings$thin
+adapt_delta_val <- settings$adapt_delta
+max_treedepth_val <- settings$max_treedepth
+n_postwarmup_draws <- postwarmup_draws(settings)
 ```
 
 The model was fit with `r n_chains` MCMC chains of `r n_iter` iterations each (`r n_warmup` warmup), thinned by `r n_thin`, yielding `r n_postwarmup_draws` post-warmup draws. The target average Metropolis acceptance probability (`adapt_delta`) was set to `r adapt_delta_val` and maximum treedepth to `r max_treedepth_val`, both raised above `brms`'s defaults to accommodate the added sampling difficulty from `bias`'s full factorial structure and, now, `bs`'s and `bias`'s random effects.
 
-`file` points at the model already fit outside this document (same formula, same 1244-row `explicit_ai`), cached in `analysis/models/` — `brm()`'s default `file_refit = "never"` means it just loads that `.rds` and skips fitting entirely on render, rather than re-running MCMC every time. Resolved via `here()` rather than a relative path for the same reason as the data path above. Split `.rds` parts (see `Scripts/split_rds.R`) are recombined before loading, if any exist.
+The fit is produced by the pipeline's `fit_ai_informative` target, which calls `fit_ddm()` with the same 1244-row `explicit_ai` shown above and caches the result as `analysis/models/ai_ddm_3way_bs_bias_re_ndraws.rds` (split into `.partNNN` chunks for GitHub). It uses `brm(file_refit = "on_change")`: the saved fit is reloaded unless the Stan code, the data, or the sampler settings have changed, in which case the model is refit. This document only reads the result.
 
-This points at `ai_ddm_3way_bs_bias_re_ndraws`, not `ai_ddm_3way_bs_re` — the latter is the prior fit, kept on disk for reference/comparison, in which only `bs` had by-subject random effects. `ai_ddm_3way_bs_bias_re_ndraws` adds the same `(1 + dist | p | sn)` random effects to `bias` too, joining the correlated random-effects block that already spanned `mu` and `bs` (see Fixed and random effects). As with `bs`'s random effects, this is a re-attempt of something explicitly flagged as risky earlier in this document — check the Convergence section below carefully before trusting any Results that depend on this fit; if it reproduces the earlier severe-divergence failure mode, the right fallback is reverting to `ai_ddm_3way_bs_re` (random effects on `bs` only, not `bias`), not pushing through with a poorly-converged fit.
-
-```{r}
-#| label: recombine-split-models
-source(here("Scripts", "split_rds.R"))
-check_and_combine_rds(here("analysis", "models"))
-```
+This model supersedes an earlier fit (`ai_ddm_3way_bs_re`, no longer kept) in which only `bs` had by-subject random effects. The current model adds the same `(1 + dist | p | sn)` random effects to `bias` too, joining the correlated random-effects block that already spanned `mu` and `bs` (see Fixed and random effects). As with `bs`'s random effects, this is a re-attempt of something explicitly flagged as risky earlier in this document — check the Convergence section below carefully before trusting any Results that depend on this fit; if it reproduces the earlier severe-divergence failure mode, the right fallback is reverting to `ai_ddm_3way_bs_re` (random effects on `bs` only, not `bias`), not pushing through with a poorly-converged fit.
 
 ```{r}
 #| label: fit
-fit_ai <- brm(formula_ai,
-  data = explicit_ai,
-  family = family_ai,
-  prior = bprior_ai, init = initfun_ai,
-  chains = n_chains, cores = n_chains,
-  iter = n_iter, warmup = n_warmup, sample_prior = TRUE,
-  save_pars = save_pars(all = TRUE), thin = n_thin,
-  file = here("analysis", "models", "ai_ddm_3way_bs_bias_re_ndraws"),
-  control = list(adapt_delta = adapt_delta_val, max_treedepth = max_treedepth_val),
-  backend = "cmdstanr", threads = threading(2)
-)
+fit_ai <- readRDS(here(tar_read(fit_ai_informative, store = store)[1]))
 ```
 
 ### Weak-prior comparison fit
 
-Same formula, same data, same sampler settings as `fit_ai` above — only `bprior_ai_weak` (see Priors \> Prior sensitivity check) differs. Cached separately so both fits are inspectable side by side rather than one overwriting the other.
+Same formula and data as `fit_ai` above, with `ddm_prior_weak()` (see Priors \> Prior sensitivity check) in place of the informative prior. Same sampler settings as well (`sampler_settings()` in `R/models.R`). Cached separately (`fit_ai_weak` target) so both fits are inspectable side by side rather than one overwriting the other.
 
 ```{r}
 #| label: fit-weak
-fit_ai_weak <- brm(formula_ai,
-  data = explicit_ai,
-  family = family_ai,
-  prior = bprior_ai_weak, init = initfun_ai_weak,
-  chains = n_chains, cores = n_chains,
-  iter = n_iter, warmup = n_warmup, sample_prior = TRUE,
-  save_pars = save_pars(all = TRUE), thin = n_thin,
-  file = here("analysis", "models", "ai_ddm_3way_bs_bias_re_weakprior"),
-  control = list(adapt_delta = adapt_delta_val, max_treedepth = max_treedepth_val),
-  backend = "cmdstanr", threads = threading(2)
-)
+fit_ai_weak <- readRDS(here(tar_read(fit_ai_weak, store = store)[1]))
 ```
 
 ## Credibility Criterion

@@ -1,6 +1,7 @@
 ---
 title: "DDM — Advantageous and Disadvantageous Inequity"
 format: html
+bibliography: grateful-refs.bib
 editor: visual
 ---
 
@@ -19,6 +20,7 @@ library(tidybayes)
 library(patchwork)
 library(knitr)
 library(here)
+library(targets)
 library(flextable)
 library(officer)
 
@@ -32,11 +34,20 @@ options(
 )
 ```
 
-Shared preprocessing lives in `Scripts/data_prep.R`, producing `explicit_ai` and `explicit_di` from a single exclusion pipeline so the two groups can't drift out of sync on criteria.
+This document is rendered by the `targets` pipeline (`_targets.R`; run `targets::tar_make()` from the project root) and only reads its results. Shared preprocessing lives in `Scripts/data_prep.R` (the pipeline's `prepped_data` target), producing `explicit_ai` and `explicit_di` from a single exclusion pipeline so the two groups can't drift out of sync on criteria. Both groups' models are defined once in `R/models.R`, so they are identical by construction; the code chunks below are pulled from that file with `knitr::read_chunk()`.
+
+```{r}
+#| label: model-definition
+source(here("R", "models.R"))
+register_model_chunks()
+```
 
 ```{r}
 #| label: data
-source(here("Scripts", "data_prep.R"))
+store <- here("_targets")
+prepped <- tar_read(prepped_data, store = store)
+explicit_ai <- prepped$ai
+explicit_di <- prepped$di
 ```
 
 ## Model parameterization
@@ -50,21 +61,13 @@ Fixed-effect priors are identical in structure for both groups: `normal(0, 1)` o
 The random-effect SD priors now differ between groups, though: both use `normal(0, 0.03)` on `mu`'s by-subject random effects, but only AI additionally has this same `0.03` scale on `bs` and `bias`'s random effects (`dpar = bs`/`dpar = bias`), since only AI's `bs`/`bias` random effects have been revisited and refit so far. `0.03` is a deliberately tight, project-specific choice, not a field-standard default — see `ddm-ai.qmd`'s "Justification for the random-effect prior scale" for the full case (sparse per-subject trial counts, this project's own divergence history, a direct head-to-head test against `HDDM`'s much wider default priors that reproduces the failure mode in a form Stan's divergence diagnostic doesn't catch, and a robustness check showing the substantive results don't depend on this choice).
 
 ```{r}
-#| label: family
-family_wiener <- wiener(link_bs = "identity", link_ndt = "identity", link_bias = "logit")
+#| label: ddm-family
 ```
 
 Credibility throughout is defined as the 95% credible interval excluding zero together with `pd > 97.5%`. ROPE percentages are available in the extracted results objects but are not the basis for calling an effect credible.
 
 ```{r}
 #| label: sampler-settings
-n_chains <- 4
-n_iter <- 10000
-n_warmup <- 500
-n_thin <- 10
-adapt_delta_val <- .95
-max_treedepth_val <- 15
-n_postwarmup_draws <- (n_iter - n_warmup) / n_thin * n_chains
 ```
 
 ```{r}
@@ -128,68 +131,22 @@ count_credible <- function(df, pd_threshold = 0.975) {
 # Advantageous Inequity (AI) Group
 
 ```{r}
-#| label: ai-formula
-formula_ai <- bf(
-  duration | dec(dec_recode) ~ 0 + condition:dist:age.group +
-    (1 + dist | p | sn),
-  ndt ~ 0 + condition:dist:age.group,
-  bias ~ 0 + condition:dist:age.group +
-    (1 + dist | p | sn),
-  bs ~ 0 + condition:dist:age.group +
-    (1 + dist | p | sn)
-)
-
-# bs and bias share mu's group id p, so brms estimates one correlated
-# 6-dimensional random-effects block (intercept + dist slope, for each of
-# mu/bs/bias) per subject rather than three independent 2-dimensional ones.
-# See ddm-ai.qmd's "Are these priors weakly identified?" for why the sd
-# priors below are deliberately tight (and how that compares to HDDM's
-# much wider defaults), and for the convergence diagnostics this produced.
-bprior_ai <-
-  prior(normal(0, 1), class = b) +
-  prior(normal(0.3, 0.1), class = b, dpar = ndt, lb = 0, ub = "min_Y") +
-  prior(normal(0, 1), class = b, dpar = bias) +
-  prior(normal(2, 1), class = b, dpar = bs, lb = 0) +
-  prior(normal(0, 0.03), class = sd, group = sn, lb = 0) +
-  prior(normal(0, 0.03), class = sd, dpar = bs, group = sn, lb = 0) +
-  prior(normal(0, 0.03), class = sd, dpar = bias, group = sn, lb = 0)
-
-tmp_dat_ai <- make_standata(formula_ai, family = family_wiener, data = explicit_ai, prior = bprior_ai)
-
-initfun_ai <- function() {
-  list(
-    b = rnorm(tmp_dat_ai$K, 0, 0.2),
-    b_bs = rnorm(tmp_dat_ai$K_bs, 2, 0.3),
-    b_ndt = runif(tmp_dat_ai$K_ndt, 0.001, 0.05),
-    b_bias = rnorm(tmp_dat_ai$K_bias, 0, 0.1),
-    sd_1 = runif(tmp_dat_ai$M_1, 0.05, 0.1),
-    z_1 = matrix(rnorm(tmp_dat_ai$M_1 * tmp_dat_ai$N_1, 0, 0.01), tmp_dat_ai$M_1, tmp_dat_ai$N_1),
-    L_1 = diag(tmp_dat_ai$M_1)
-  )
-}
+#| label: ddm-formula
 ```
-
-Split `.rds` parts (see `Scripts/split_rds.R`) are recombined before loading, if any exist.
 
 ```{r}
-#| label: recombine-split-models
-source(here("Scripts", "split_rds.R"))
-check_and_combine_rds(here("analysis", "models"))
+#| label: ddm-prior-informative
 ```
+
+```{r}
+#| label: ddm-inits
+```
+
+Fit by the pipeline's `fit_ai_informative` target (`fit_ddm()` in `R/models.R`); loaded here.
 
 ```{r}
 #| label: ai-fit
-fit_ai <- brm(formula_ai,
-  data = explicit_ai,
-  family = family_wiener,
-  prior = bprior_ai, init = initfun_ai,
-  chains = n_chains, cores = n_chains,
-  iter = n_iter, warmup = n_warmup, sample_prior = TRUE,
-  save_pars = save_pars(all = TRUE), thin = n_thin,
-  file = here("analysis", "models", "ai_ddm_3way_bs_bias_re_ndraws"),
-  control = list(adapt_delta = adapt_delta_val, max_treedepth = max_treedepth_val),
-  backend = "cmdstanr", threads = threading(2)
-)
+fit_ai <- readRDS(here(tar_read(fit_ai_informative, store = store)[1]))
 
 summary(fit_ai)
 ```
@@ -242,58 +199,11 @@ Taken together, the effect of the fairness prompt on advantageous inequity avers
 
 # Disadvantageous Inequity (DI) Group
 
-```{r}
-#| label: di-formula
-formula_di <- bf(
-  duration | dec(dec_recode) ~ 0 + condition:dist:age.group +
-    (1 + dist | p | sn),
-  ndt ~ 0 + condition:dist:age.group,
-  bias ~ 0 + condition:dist:age.group +
-    (1 + dist | p | sn),
-  bs ~ 0 + condition:dist:age.group +
-    (1 + dist | p | sn)
-)
-
-# bs and bias share mu's group id p here too, matching the AI section above --
-# see ddm-di.qmd and ddm-ai.qmd's Priors sections for the full justification
-# and convergence diagnostics.
-bprior_di <-
-  prior(normal(0, 1), class = b) +
-  prior(normal(0.3, 0.1), class = b, dpar = ndt, lb = 0, ub = "min_Y") +
-  prior(normal(0, 1), class = b, dpar = bias) +
-  prior(normal(2, 1), class = b, dpar = bs, lb = 0) +
-  prior(normal(0, 0.03), class = sd, group = sn, lb = 0) +
-  prior(normal(0, 0.03), class = sd, dpar = bs, group = sn, lb = 0) +
-  prior(normal(0, 0.03), class = sd, dpar = bias, group = sn, lb = 0)
-
-tmp_dat_di <- make_standata(formula_di, family = family_wiener, data = explicit_di, prior = bprior_di)
-
-initfun_di <- function() {
-  list(
-    b = rnorm(tmp_dat_di$K, 0, 0.2),
-    b_bs = rnorm(tmp_dat_di$K_bs, 2, 0.3),
-    b_ndt = runif(tmp_dat_di$K_ndt, 0.001, 0.05),
-    b_bias = rnorm(tmp_dat_di$K_bias, 0, 0.1),
-    sd_1 = runif(tmp_dat_di$M_1, 0.05, 0.1),
-    z_1 = matrix(rnorm(tmp_dat_di$M_1 * tmp_dat_di$N_1, 0, 0.01), tmp_dat_di$M_1, tmp_dat_di$N_1),
-    L_1 = diag(tmp_dat_di$M_1)
-  )
-}
-```
+Same model definition as the AI group above (formula, family, informative prior, starting values, and sampler settings from `R/models.R`), fit by the pipeline's `fit_di_informative` target.
 
 ```{r}
 #| label: di-fit
-fit_di <- brm(formula_di,
-  data = explicit_di,
-  family = family_wiener,
-  prior = bprior_di, init = initfun_di,
-  chains = n_chains, cores = n_chains,
-  iter = n_iter, warmup = n_warmup, sample_prior = TRUE,
-  save_pars = save_pars(all = TRUE), thin = n_thin,
-  file = here("analysis", "models", "di_3way_bs_bias_re_ndraws"),
-  control = list(adapt_delta = adapt_delta_val, max_treedepth = max_treedepth_val),
-  backend = "cmdstanr", threads = threading(2)
-)
+fit_di <- readRDS(here(tar_read(fit_di_informative, store = store)[1]))
 
 summary(fit_di)
 ```
@@ -795,3 +705,22 @@ Disadvantageous inequity aversion required no prompting. From the youngest age t
 Advantageous inequity aversion followed a slower and more context-dependent trajectory. Left to their own devices (the autonomous and baseline conditions), children did not reliably object to advantageous unfairness until 8–9 years — three to four years later than their objection to disadvantageous unfairness, and consistent with prior developmental work placing advantageous inequity aversion's spontaneous emergence around that age. An explicit fairness prompt, however, brought this sensitivity forward to 4–5 years, the youngest age tested. Advantageous inequity aversion therefore appears to be present but dormant in younger children, requiring either additional development or explicit framing to become detectable.
 
 This asymmetry is located specifically in drift rate rather than in non-decision time, which carried no reliable signal in either group. Each group additionally recruited one secondary parameter, and the two did not overlap. In the disadvantageous group, starting point shifted credibly in the autonomous and baseline conditions from 6–7 years onward, with no corresponding effect in the advantageous group. In the advantageous group, boundary separation showed a credible secondary pattern in the norm condition — wider boundaries on equal-split trials, present on essentially the same timeline as drift rate itself rather than preceding it, with the autonomous condition showing a smaller version of the same pattern by 8–9 years. Boundary separation's credible cells were close to a subset of drift rate's, indicating that this reflects caution and evidence accumulation moving together once fairness was made explicit, rather than an independent or earlier-emerging process. Boundary separation showed no corresponding signal in the disadvantageous group. This asymmetry itself is well supported, but the advantageous group's boundary-separation finding specifically is more prior-sensitive than its drift-rate finding: a formal check substituting a weakly informative random-effect prior (`ddm-ai.qmd`, Priors \> Prior sensitivity check) left only one of its four credible cells standing, whereas the disadvantageous group's already-sparse boundary-separation cells were essentially unaffected by the same check. The two forms of inequity aversion are thus asymmetric not only in when they emerge, but in which secondary process — starting point or boundary separation — accompanies drift rate in carrying the effect, with that second half of the asymmetry resting on a less robust footing for the advantageous group.
+
+# Software
+
+```{r}
+#| label: software-citations
+#| echo: false
+# Cites every R package the project uses (pipeline target packages_used);
+# writes grateful-refs.bib next to this document for the references below.
+grateful::cite_packages(
+  output = "paragraph",
+  pkgs = tar_read(packages_used, store = store),
+  out.dir = here("analysis")
+)
+```
+
+# References
+
+::: {#refs}
+:::

@@ -7,3 +7,11 @@ archive/
 # chunks are tracked instead and reassembled with combine_rds_file().
 analysis/models/ai_ddm_3way_bs_bias_re_ndraws.rds
 analysis/models/di_3way_bs_bias_re_ndraws.rds
+analysis/models/ai_ddm_3way_bs_bias_re_weakprior.rds
+analysis/models/di_3way_bs_bias_re_weakprior.rds
+
+# targets pipeline cache (rebuilt locally by targets::tar_make())
+_targets/
+
+# Word/Office lock files
+~$*
