@@ -19,7 +19,9 @@ muted <- "#6b6b6b"
 # Illustrative parameters
 a <- 2       # boundary separation
 z <- 0.5     # relative starting point (0 = accept, 1 = reject); 0.5 = unbiased
-v <- 0       # drift rate used for simulation: 0 so both responses are equally likely
+v <- 0.8     # mean drift rate (positive = toward Reject)
+sv <- 1.0    # across-trial drift variability: makes the less likely (Accept)
+             # responses slower and more right-skewed ("slow errors")
 v_arrow <- 0.9  # slope of the illustrative drift arrow (direction of evidence accumulation)
 ter <- 0.3   # non-decision time (s)
 dt <- 0.002
@@ -29,8 +31,9 @@ t_max <- 2.2
 simulate_path <- function() {
   x <- z * a
   xs <- x
+  v_i <- rnorm(1, v, sv)
   while (x > 0 && x < a && length(xs) * dt < t_max - ter) {
-    x <- x + v * dt + s * sqrt(dt) * rnorm(1)
+    x <- x + v_i * dt + s * sqrt(dt) * rnorm(1)
     xs <- c(xs, x)
   }
   xs <- pmin(pmax(xs, 0), a)
@@ -38,27 +41,47 @@ simulate_path <- function() {
              hit = if (xs[length(xs)] >= a) "reject" else if (xs[length(xs)] <= 0) "accept" else "none")
 }
 
-# First-passage times for the RT distributions
+# First-passage times for the RT distributions (vectorised simulation)
 set.seed(11)
-fpt <- do.call(rbind, lapply(1:4000, \(i) {
-  p <- simulate_path()
-  data.frame(rt = max(p$t), hit = p$hit[1])
-}))
-fpt <- fpt[fpt$hit != "none", ]
+n_sim <- 40000
+x <- rep(z * a, n_sim)
+v_i <- rnorm(n_sim, v, sv)
+rt <- rep(NA_real_, n_sim)
+hit <- rep(NA_character_, n_sim)
+active <- rep(TRUE, n_sim)
+t_now <- ter
+while (any(active) && t_now < t_max) {
+  t_now <- t_now + dt
+  idx <- which(active)
+  x[idx] <- x[idx] + v_i[idx] * dt + s * sqrt(dt) * rnorm(length(idx))
+  up <- idx[x[idx] >= a]
+  lo <- idx[x[idx] <= 0]
+  rt[up] <- t_now; hit[up] <- "reject"
+  rt[lo] <- t_now; hit[lo] <- "accept"
+  active[c(up, lo)] <- FALSE
+}
 
-# With v = 0 and z = .5 the model is symmetric, so both boundaries share one
-# RT distribution. Pool all first-passage times (removes simulation noise)
-# and draw the same curve above Reject and mirrored below Accept.
-d_rt <- density(fpt$rt, from = ter, to = t_max, adjust = 1.2)
-d_y <- d_rt$y / max(d_rt$y) * 0.6
-dens_reject <- data.frame(t = d_rt$x, ymin = a, ymax = a + d_y)
-dens_accept <- data.frame(t = d_rt$x, ymin = 0, ymax = -d_y)
+# Defective densities: each curve's area is proportional to how often that
+# response occurs, so Reject (favoured by v > 0) is larger, and drift
+# variability makes the Accept distribution slower and more skewed.
+dens_for <- function(h) {
+  d <- density(rt[hit %in% h], from = ter, to = t_max, adjust = 1.2)
+  data.frame(t = d$x, y = d$y * mean(hit %in% h))
+}
+d_rej <- dens_for("reject")
+d_acc <- dens_for("accept")
+scale_k <- 0.6 / max(d_rej$y, d_acc$y)
+dens_reject <- data.frame(t = d_rej$t, ymin = a, ymax = a + d_rej$y * scale_k)
+dens_accept <- data.frame(t = d_acc$t, ymin = 0, ymax = -d_acc$y * scale_k)
+message(sprintf("P(reject) = %.2f; median RT reject = %.2f, accept = %.2f",
+                mean(hit %in% "reject"), median(rt[hit %in% "reject"]),
+                median(rt[hit %in% "accept"])))
 
-# Example paths: 3 ending at Reject, 3 at Accept; one of each highlighted
+# Example paths: 4 ending at Reject, 2 at Accept (reflecting the drift); one of each highlighted
 set.seed(4)
 paths <- list()
 n_hit <- c(reject = 0, accept = 0)
-want <- c(reject = 3, accept = 3)
+want <- c(reject = 4, accept = 2)
 while (sum(n_hit) < sum(want)) {
   p <- simulate_path()
   h <- p$hit[1]
@@ -69,7 +92,9 @@ while (sum(n_hit) < sum(want)) {
 }
 paths <- do.call(rbind, Map(\(p, i) cbind(p, id = i), paths, seq_along(paths)))
 hi_reject <- paths[paths$hit == "reject", ]
-hi_reject <- hi_reject[hi_reject$id == min(hi_reject$id), ]
+# highlight the fastest Reject path so it stays clear of the v label
+end_t <- tapply(hi_reject$t, hi_reject$id, max)
+hi_reject <- hi_reject[hi_reject$id == as.integer(names(which.min(end_t))), ]
 hi_accept <- paths[paths$hit == "accept", ]
 hi_accept <- hi_accept[hi_accept$id == min(hi_accept$id), ]
 
@@ -125,7 +150,7 @@ g <- ggplot() +
   labs(caption = paste0(
     "a = boundary separation (response caution);  z = starting point (a priori bias);\n",
     "v = drift rate (evidence accumulation; positive toward reject);  Ter = non-decision time.\n",
-    "Lines: simulated evidence paths, colored by the response they end in (one of each highlighted).\nShaded curves: response-time distributions at each boundary."
+    "Lines: simulated evidence paths, colored by the response they end in (one of each highlighted).\nShaded curves: response-time distributions at each boundary; area reflects response probability."
   )) +
   scale_x_continuous("Time (s)", breaks = seq(0, 2, 0.5), expand = expansion(mult = c(0.02, 0.01))) +
   scale_y_continuous("Evidence", breaks = NULL) +
