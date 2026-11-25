@@ -28,6 +28,10 @@ Scripts/
 analysis/
   ai/ddm-ai.qmd                     AI-group model, results, and write-up
   di/ddm-di.qmd                     DI-group model, results, and write-up
+  ddm-combined.qmd                  Both groups side by side: paper tables and figures
+  ddm-combined-tables.docx          Word versions of the results tables (written on render)
+  ddm-model-tables.docx             Word table of model specification + priors
+                                     (written on render from R/models.R)
   models/
     ai_ddm_3way_bs_bias_re_ndraws.rds           Cached AI model fit
     di_3way_bs_bias_re_ndraws.rds                Cached DI model fit

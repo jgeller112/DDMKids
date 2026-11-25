@@ -13,6 +13,11 @@ the root `README.md`).
   `report_combined`).
 - **`ddm-combined-tables.docx`**: Native Word versions of the
   combined document's tables, written on render.
+- **`ddm-model-tables.docx`**: APA-style Word table of the model
+  specification (links, fixed and random effects) and both prior sets
+  (primary and sensitivity), for the manuscript. Written on render by the
+  `model-spec-table` chunk of `ddm-combined.qmd`, which reads the priors and
+  sampler settings straight from `R/models.R`.
 - **`ddm-combined_files/`**: Quarto-generated assets (figures, libs) for
   `ddm-combined.html`. Auto-generated on render; safe to delete and
   regenerate, not hand-edited.

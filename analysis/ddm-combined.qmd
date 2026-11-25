@@ -584,6 +584,124 @@ word_doc <- officer::read_docx() |>
 print(word_doc, target = here("analysis", "ddm-combined-tables.docx"))
 ```
 
+## Model specification and priors table
+
+A compact table of the model structure (link, fixed and random effects) and both prior sets, meant to stand in for most of the model-specification prose in the manuscript. The prior columns are read directly from `ddm_prior_informative()` and `ddm_prior_weak()` in `R/models.R`, and the sampler details in the note from `sampler_settings()`, so the table always matches what was actually fit. It is written to `ddm-model-tables.docx` (landscape) next to this file.
+
+```{r}
+#| label: model-spec-table
+# brms prior row -> display string, e.g. normal(2, 1) with lb = 0 -> "N(2, 1), > 0".
+# Random-effect SDs (class sd, lb = 0) are half-normal -> "N⁺(0, 0.03)".
+fmt_prior <- function(p) {
+  args <- sub("^normal\\((.*)\\)$", "\\1", p$prior)
+  if (p$class == "sd") return(sprintf("N⁺(%s)", args))
+  out <- sprintf("N(%s)", args)
+  if (!is.na(p$ub) && p$ub == "min_Y") {
+    out <- paste0(out, ", [0, min RT]")
+  } else if (!is.na(p$lb) && p$lb == "0") {
+    out <- paste0(out, ", > 0")
+  }
+  out
+}
+
+# Look up one parameter's prior (dpar "" = drift rate) of a given class.
+prior_for <- function(prior, dpar, class) {
+  df <- as.data.frame(prior)
+  df$dpar[is.na(df$dpar)] <- ""
+  hit <- df[df$dpar == dpar & df$class == class, ]
+  if (nrow(hit) == 0) "—" else fmt_prior(hit[1, ])
+}
+
+spec_params <- tibble::tribble(
+  ~dpar,  ~param,                     ~link,      ~re,
+  "",     "Drift rate (v)",           "Identity", "(1 + Split | Subject)",
+  "bs",   "Boundary separation (a)",  "Identity", "(1 + Split | Subject)",
+  "bias", "Starting point (z)",       "Logit",    "(1 + Split | Subject)",
+  "ndt",  "Non-decision time (Ter)",  "Identity", "—"
+)
+
+prior_primary <- ddm_prior_informative()
+prior_sens <- ddm_prior_weak()
+
+model_spec_df <- spec_params |>
+  mutate(
+    fixed = "0 + Cond × Split × Age",
+    b_primary  = map_chr(dpar, \(d) prior_for(prior_primary, d, "b")),
+    b_sens     = map_chr(dpar, \(d) prior_for(prior_sens, d, "b")),
+    sd_primary = map_chr(dpar, \(d) prior_for(prior_primary, d, "sd")),
+    sd_sens    = map_chr(dpar, \(d) prior_for(prior_sens, d, "sd"))
+  ) |>
+  select(param, link, fixed, re, b_primary, b_sens, sd_primary, sd_sens)
+
+black <- officer::fp_border(color = "black", width = 1.5)
+model_spec_ft <- flextable(model_spec_df) |>
+  set_header_labels(
+    param = "Parameter", link = "Link", fixed = "Fixed effects",
+    re = "Random effects", b_primary = "Primary", b_sens = "Sensitivity",
+    sd_primary = "Primary", sd_sens = "Sensitivity"
+  ) |>
+  add_header_row(
+    top = TRUE,
+    values = c("", "Model structure", "Fixed-effect prior", "Random-effect SD prior"),
+    colwidths = c(1, 3, 2, 2)
+  ) |>
+  merge_v(part = "header", j = 1) |>
+  border_remove() |>
+  hline_top(part = "header", border = black) |>
+  hline(i = 1, j = 2:8, part = "header", border = officer::fp_border(width = 0.75)) |>
+  hline_bottom(part = "header", border = black) |>
+  hline_bottom(part = "body", border = black) |>
+  align(part = "header", align = "center") |>
+  align(j = 1, part = "all", align = "left") |>
+  valign(part = "header", valign = "bottom") |>
+  font(part = "all", fontname = "Times New Roman") |>
+  fontsize(part = "all", size = 10) |>
+  padding(part = "all", padding.top = 2, padding.bottom = 2) |>
+  autofit()
+
+s <- sampler_settings()
+model_spec_title <- "Diffusion Model Specification and Prior Distributions"
+model_spec_note <- paste0(
+  "The same model was fit separately to the advantageous-inequity (AI) ",
+  "and disadvantageous-inequity (DI) data with brms (Wiener family, cmdstanr ",
+  "backend). Fixed effects use cell-means coding (no intercept): one coefficient ",
+  "for each of the 18 Condition (autonomous, baseline, norm) × Split (equal, ",
+  "unequal) × Age group (4–5, 6–7, 8–9 years) cells. Subject-level ",
+  "intercepts and Split slopes for drift rate, boundary separation, and starting ",
+  "point were allowed to correlate across parameters (LKJ(1) prior on the ",
+  "correlation matrix, brms default). Starting-point fixed effects and SDs are on ",
+  "the logit scale (0 = unbiased). N⁺ = half-normal. min RT = the smallest ",
+  "observed response time. The sensitivity priors widen the fixed-effect priors ",
+  "threefold and use the HDDM default random-effect SDs (Wiecki et al., 2013). ",
+  sprintf(
+    "Sampling: %d chains × %s iterations (%s warm-up; %s post-warm-up draws), adapt_delta = %s, maximum tree depth = %d. ",
+    s$chains, format(s$iter, big.mark = ","), format(s$warmup, big.mark = ","),
+    format(postwarmup_draws(s), big.mark = ","),
+    sub("^0", "", format(s$adapt_delta)), s$max_treedepth
+  ),
+  "brms formula: RT | dec(response) ~ 0 + condition:split:age + ",
+  "(1 + split | p | subject); bs, bias ~ same; ndt ~ 0 + condition:split:age."
+)
+
+model_spec_doc <- officer::read_docx() |>
+  officer::body_add_fpar(officer::fpar(officer::ftext("Table X",
+    officer::fp_text(bold = TRUE, font.family = "Times New Roman", font.size = 12)))) |>
+  officer::body_add_fpar(officer::fpar(officer::ftext(model_spec_title,
+    officer::fp_text(italic = TRUE, font.family = "Times New Roman", font.size = 12)))) |>
+  flextable::body_add_flextable(model_spec_ft) |>
+  officer::body_add_fpar(officer::fpar(
+    officer::ftext("Note. ", officer::fp_text(italic = TRUE, font.family = "Times New Roman", font.size = 10)),
+    officer::ftext(model_spec_note, officer::fp_text(font.family = "Times New Roman", font.size = 10))
+  )) |>
+  officer::body_set_default_section(
+    officer::prop_section(page_size = officer::page_size(orient = "landscape"))
+  )
+
+print(model_spec_doc, target = here("analysis", "ddm-model-tables.docx"))
+
+model_spec_ft
+```
+
 # Combined Figures
 
 Each parameter gets one figure spanning both groups, rows for AI vs. DI and columns for age group, so the two groups' patterns sit directly above and below each other rather than in separate documents. Condition is encoded by both fill color and y-axis position (redundant on purpose, since the labels alone already disambiguate condition — color reinforces rather than carries the identity), using three colors chosen to stay visually distinct for readers with color vision deficiencies as well as typical color vision.
