@@ -24,6 +24,7 @@ Scripts/
                                      shared by both groups, so exclusion criteria
                                      can't drift out of sync between them.
   split_rds.R                       Split/recombine large .rds fits for GitHub.
+  ddm_schematic.R                   Illustrative DDM figure (ggplot) for the paper.
 
 analysis/
   ai/ddm-ai.qmd                     AI-group model, results, and write-up
@@ -32,6 +33,9 @@ analysis/
   ddm-combined-tables.docx          Word versions of the results tables (written on render)
   ddm-model-tables.docx             Word table of model specification + priors
                                      (written on render from R/models.R)
+  figures/
+    ddm-schematic.png / .pdf        Illustrative DDM diagram (a, z, v, Ter;
+                                     Reject = red, Accept = green)
   models/
     ai_ddm_3way_bs_bias_re_ndraws.rds           Cached AI model fit
     di_3way_bs_bias_re_ndraws.rds                Cached DI model fit

@@ -18,6 +18,10 @@ the root `README.md`).
   (primary and sensitivity), for the manuscript. Written on render by the
   `model-spec-table` chunk of `ddm-combined.qmd`, which reads the priors and
   sampler settings straight from `R/models.R`.
+- **`figures/ddm-schematic.png`** / **`.pdf`**: Illustrative DDM diagram
+  for the paper, with the four parameters labelled (Reject = red upper
+  boundary, Accept = green lower boundary). Example values only, not
+  estimates. Regenerate with `Rscript --no-init-file Scripts/ddm_schematic.R`.
 - **`ddm-combined_files/`**: Quarto-generated assets (figures, libs) for
   `ddm-combined.html`. Auto-generated on render; safe to delete and
   regenerate, not hand-edited.
